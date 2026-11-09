@@ -1,0 +1,9 @@
+node_modules/
+references/live/
+.claude/skills/express-addon-review/references/live/
+review-output/
+.DS_Store
+.share/
+site-dist/
+measurements.json
+agent-tools/
