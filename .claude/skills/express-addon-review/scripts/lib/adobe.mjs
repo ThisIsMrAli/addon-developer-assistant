@@ -419,6 +419,7 @@ function skipCopyLine(line) {
   if (/^console\.(?:log|warn|error|info|debug|trace)\(/.test(trimmed)) return true;
   if (/<title\b/i.test(line)) return true;
   if (/<meta\b/i.test(line) && /\bname=["'](?:keywords|description)["']/i.test(line)) return true;
+  if (/\bcontent\s*=\s*["'][^"']*(?:Adobe,\s*Express,\s*Add-On|Get started with Add-on development)/i.test(line)) return true;
   return false;
 }
 

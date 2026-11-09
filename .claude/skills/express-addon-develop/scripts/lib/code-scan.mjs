@@ -254,49 +254,134 @@ export function storageKinds(files) {
 }
 
 /**
- * A throw or authorize() that is not inside a try, and whose function is not called from a try.
- * A catch in some other function does not cover it.
+ * A throw or authorize() is covered when a try/catch reaches it.
+ * That includes a wrapper (`_run`, `_guard`, `_act`) whose parameter is called inside the try,
+ * and a throw several calls deeper than the guarded handler.
+ * A catch in some other function that never calls this one does not cover it.
  */
 export function controlFlow(files) {
   const programs = [];
   for (const file of files) {
     if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(file.rel || file.file || "")) continue;
     const parsed = parseSource(file.rel || file.file, file.text);
-    if (parsed.ast) programs.push({ rel: file.rel || file.file, ast: parsed.ast });
+    if (parsed.ast) programs.push(parsed.ast);
   }
-  const names = new WeakMap();
-  for (const { ast } of programs) {
+  let nextId = 0;
+  const idOf = new WeakMap();
+  const byName = new Map();
+  const identify = (node, name) => {
+    if (!idOf.has(node)) idOf.set(node, ++nextId);
+    const id = idOf.get(node);
+    if (name) {
+      const list = byName.get(name) || [];
+      if (!list.includes(id)) list.push(id);
+      byName.set(name, list);
+    }
+    return id;
+  };
+  for (const ast of programs) {
     walk(ast, (node) => {
-      if (node.type === "FunctionDeclaration" && node.id?.name) names.set(node, node.id.name);
-      if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) names.set(node.init, node.id.name);
+      if (node.type === "FunctionDeclaration" && node.id?.name) identify(node, node.id.name);
+      if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) identify(node.init, node.id.name);
+      if ((node.type === "ClassMethod" || node.type === "ObjectMethod" || node.type === "ClassPrivateMethod") && node.key?.type === "Identifier") identify(node, node.key.name);
+      if (node.type === "Property" && !node.computed && node.key?.type === "Identifier" && isFunction(node.value)) identify(node.value, node.key.name);
+      if ((isFunction(node) || node.type === "ClassMethod" || node.type === "ObjectMethod") && !idOf.has(node)) identify(node, "");
     });
   }
-  const calledInTry = new Set();
-  for (const { ast } of programs) {
+  const invocations = new Map();
+  const invoke = (id, inTry, callerId) => {
+    if (!id) return;
+    const list = invocations.get(id) || [];
+    list.push({ inTry, callerId });
+    invocations.set(id, list);
+  };
+  const callbackSlots = new Map();
+  for (const ast of programs) {
+    walk(ast, (node) => {
+      if (!isCallable(node)) return;
+      const id = idOf.get(node);
+      const params = paramNames(node);
+      const slots = new Set();
+      walk(node.body, (inner, innerStack) => {
+        if (inner.type !== "CallExpression" || inner.callee?.type !== "Identifier") return;
+        const index = params.indexOf(inner.callee.name);
+        if (index >= 0 && innerStack.some((item) => item.type === "TryStatement")) slots.add(index);
+      });
+      if (slots.size) callbackSlots.set(id, slots);
+    });
+  }
+  for (const ast of programs) {
     walk(ast, (node, stack) => {
       if (node.type !== "CallExpression") return;
+      const callerId = enclosingFn(stack, idOf);
+      const here = stack.some((item) => item.type === "TryStatement");
       const name = calleeName(node.callee);
-      if (name && stack.some((item) => item.type === "TryStatement")) calledInTry.add(name);
+      const ids = name && byName.has(name) ? byName.get(name) : [];
+      for (const id of ids) invoke(id, here, callerId);
+      node.arguments?.forEach((arg, index) => {
+        const wrapped = ids.some((id) => callbackSlots.get(id)?.has(index));
+        if (isFunction(arg)) invoke(idOf.get(arg), wrapped, callerId);
+        if (wrapped && arg?.type === "Identifier" && byName.has(arg.name)) {
+          for (const id of byName.get(arg.name)) invoke(id, true, callerId);
+        }
+      });
     });
   }
+  const covered = (id, seen = new Set()) => {
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    const sites = invocations.get(id) || [];
+    if (!sites.length) return false;
+    return sites.every((site) => site.inTry || (site.callerId && covered(site.callerId, seen)));
+  };
   let unhandledThrow = false;
   let unhandledAuthorize = false;
-  for (const { ast } of programs) {
+  for (const ast of programs) {
     walk(ast, (node, stack) => {
-      const covered = stack.some((item) => item.type === "TryStatement") || calledFromTry(stack, names, calledInTry);
-      if (node.type === "ThrowStatement" && !covered) unhandledThrow = true;
-      if (node.type === "CallExpression" && isAuthorize(node.callee) && !covered) unhandledAuthorize = true;
+      const fnId = enclosingFn(stack, idOf);
+      const safe = stack.some((item) => item.type === "TryStatement") || (fnId && covered(fnId));
+      if (node.type === "ThrowStatement" && !safe) unhandledThrow = true;
+      if (node.type === "CallExpression" && isAuthorize(node.callee) && !safe) unhandledAuthorize = true;
     });
   }
   return { unhandledThrow, unhandledAuthorize };
 }
 
-function calledFromTry(stack, names, calledInTry) {
+function isCallable(node) {
+  return isFunction(node) || node?.type === "ClassMethod" || node?.type === "ObjectMethod" || node?.type === "ClassPrivateMethod";
+}
+
+function enclosingFn(stack, idOf) {
   for (let i = stack.length - 1; i >= 0; i -= 1) {
-    const name = names.get(stack[i]);
-    if (name && calledInTry.has(name)) return true;
+    if (isCallable(stack[i]) && idOf.has(stack[i])) return idOf.get(stack[i]);
   }
-  return false;
+  return 0;
+}
+
+const IMAGE_CALL = /(^|\.)(addImage|createImage|createImageContainer|loadBitmapImage)$/;
+
+/** An image call is placed when its function uses the shared free-space layout, not the page center alone. */
+export function imagePlacedWithContent(files) {
+  let saw = false;
+  let unplaced = false;
+  for (const file of files) {
+    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(file.rel || file.file || "")) continue;
+    const text = String(file.text || "");
+    const parsed = parseSource(file.rel || file.file, text);
+    if (!parsed.ast) continue;
+    const layout = /boundsInParent/.test(text) && /page\.width\s*\/\s*2\s*\+/.test(text);
+    walk(parsed.ast, (node, stack) => {
+      if (node.type !== "CallExpression") return;
+      const called = calleeName(node.callee);
+      if (!called || !IMAGE_CALL.test(called)) return;
+      saw = true;
+      const owner = [...stack].reverse().find((item) => isCallable(item));
+      const body = owner && Number.isInteger(owner.start) && Number.isInteger(owner.end) ? text.slice(owner.start, owner.end) : text;
+      const shares = /boundsInParent/.test(body) || /placeOnPage\s*\(/.test(body);
+      if (!shares || !layout) unplaced = true;
+    });
+  }
+  return saw && !unplaced;
 }
 
 function resolveReceiver(object, stack, calledWith, names) {

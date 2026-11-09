@@ -286,7 +286,7 @@ test("the dev server is started with npm start and only https://localhost:5241 c
   assert.equal(calls[0].cmd, "npm");
   assert.deepEqual(calls[0].args, ["start", "--", "--analytics", "off"]);
   assert.equal(calls[0].options.cwd, "/tmp/addon");
-  assert.equal(calls[0].options.env, undefined);
+  assert.match(calls[0].options.env.PATH, /express-no-sudo/);
   const timedOut = await waitForDevServer({
     cwd: "/tmp/addon",
     timeoutMs: 0,

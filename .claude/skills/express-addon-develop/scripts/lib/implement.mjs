@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { checkJsSyntax, controlFlow, projectPanels, scanHtml, scanJs, storageKinds, stripComments } from "./code-scan.mjs";
+import { checkJsSyntax, controlFlow, imagePlacedWithContent, projectPanels, scanHtml, scanJs, storageKinds, stripComments } from "./code-scan.mjs";
 import { buildProject } from "./package-addon.mjs";
 
 /** Pinned to the release whose scaffolder was checked. `AddOnBuilder._updateManifest` sets `testId` and the display name. */
@@ -102,54 +102,144 @@ export function briefNeeds(brief) {
  * resize() with ResizeBehavior.contain fits both the width and the height (resize-elements.md).
  * The font is capped, and the node is resized only when it is larger than that box.
  * The first heading is centered. The next one sits below existing content or the selection.
+ * An image uses that same free slot, so it does not cover a heading.
+ * When the next slot would leave the page, the node moves to the next column or shrinks.
  * The default 100pt text is left at the top-left origin, so a heading runs off the left edge.
  * Scaling a short word to the full page width makes it overflow the other edge.
  */
 export const TEXT_INSIDE_PAGE = `import { editor, constants } from "express-document-sdk";
 
-export function addHeading(heading) {
-  const page = editor.context.insertionParent;
-  const textNode = editor.createText(heading);
-  const margin = Math.round(Math.min(page.width, page.height) * 0.08);
-  const maxWidth = Math.max(32, page.width - margin * 2);
-  const maxHeight = Math.max(32, page.height - margin * 2);
-  const cap = Math.min(72, Math.round(page.width / 16));
-  page.children.append(textNode);
-  textNode.fullContent.applyCharacterStyles(
-    { fontSize: cap, color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
-    { start: 0, length: heading.length }
-  );
-  const box = textNode.boundsLocal;
+function fitInside(node, maxWidth, maxHeight) {
+  const box = node.boundsLocal;
   if (box.width > maxWidth || box.height > maxHeight) {
-    textNode.resize({
+    node.resize({
       width: maxWidth,
       height: maxHeight,
       behavior: constants.ResizeBehavior.contain,
       avoidScalingVisualDetailsIfPossible: false
     });
   }
-  const fitted = textNode.boundsLocal;
-  const anchor = textNode.centerPointLocal || { x: fitted.x + fitted.width / 2, y: fitted.y + fitted.height / 2 };
-  let below = null;
-  for (const node of page.children) {
-    if (node === textNode || !node.boundsInParent) continue;
-    const placed = node.boundsInParent;
-    const bottom = placed.y + placed.height;
-    if (below === null || bottom > below) below = bottom;
+}
+
+function freeSlot(node, page, margin, kind) {
+  const fitted = node.boundsLocal;
+  const w = fitted.width;
+  const h = fitted.height;
+  const gap = Math.max(8, Math.round(Math.max(h, 1) * 0.15));
+  const others = [];
+  for (const item of page.children) {
+    if (item === node || !item.boundsInParent) continue;
+    others.push(item.boundsInParent);
   }
   const selected = editor.context.selection && editor.context.selection[0];
-  if (selected && selected !== textNode && selected.boundsInParent) {
-    const placed = selected.boundsInParent;
-    const bottom = placed.y + placed.height;
-    if (below === null || bottom > below) below = bottom;
+  if (selected && selected !== node && selected.boundsInParent) others.push(selected.boundsInParent);
+  const candidates = [];
+  if (!others.length) {
+    if (kind === "stack") candidates.push({ x: page.width / 2, y: page.height / 2 });
+  } else if (kind === "stack") {
+    let below = null;
+    for (const placed of others) {
+      const bottom = placed.y + placed.height;
+      if (below === null || bottom > below) below = bottom;
+    }
+    candidates.push({ x: page.width / 2, y: below + gap + h / 2 });
+  } else if (kind === "column") {
+    let top = null;
+    for (const placed of others) if (top === null || placed.y < top) top = placed.y;
+    const y0 = top + h / 2;
+    for (let column = 1; column <= 8; column += 1) {
+      const x = page.width / 2 + column * (w + gap);
+      let y = y0;
+      for (let row = 0; row < 12; row += 1) {
+        candidates.push({ x, y });
+        y += h + gap;
+      }
+    }
+  } else {
+    const stepX = Math.max(24, Math.round(w + gap));
+    const stepY = Math.max(24, Math.round(h + gap));
+    for (let y = margin + h / 2; y <= page.height - margin - h / 2; y += stepY) {
+      for (let x = margin + w / 2; x <= page.width - margin - w / 2; x += stepX) candidates.push({ x, y });
+    }
   }
-  const gap = Math.max(8, Math.round(fitted.height * 0.15));
-  let centerY = below === null ? page.height / 2 : below + gap + fitted.height / 2;
-  const minY = margin + fitted.height / 2;
-  const maxY = page.height - margin - fitted.height / 2;
-  if (centerY > maxY) centerY = maxY;
-  if (centerY < minY) centerY = minY;
-  textNode.setPositionInParent({ x: page.width / 2, y: centerY }, anchor);
+  for (const slot of candidates) {
+    const rect = { x: slot.x - w / 2, y: slot.y - h / 2, width: w, height: h };
+    if (rect.x < margin - 0.5 || rect.y < margin - 0.5) continue;
+    if (rect.x + rect.width > page.width - margin + 0.5 || rect.y + rect.height > page.height - margin + 0.5) continue;
+    let hit = false;
+    for (const placed of others) {
+      if (rect.x < placed.x + placed.width && rect.x + rect.width > placed.x && rect.y < placed.y + placed.height && rect.y + rect.height > placed.y) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) return slot;
+  }
+  return null;
+}
+
+function placeOnPage(node, page) {
+  const margin = Math.round(Math.min(page.width, page.height) * 0.08);
+  const maxWidth = Math.max(32, page.width - margin * 2);
+  const maxHeight = Math.max(32, page.height - margin * 2);
+  fitInside(node, maxWidth, maxHeight);
+  const drop = (slot) => {
+    const fitted = node.boundsLocal;
+    const anchor = node.centerPointLocal || { x: fitted.x + fitted.width / 2, y: fitted.y + fitted.height / 2 };
+    node.setPositionInParent(slot, anchor);
+  };
+  const stacked = freeSlot(node, page, margin, "stack");
+  if (stacked) return drop(stacked);
+  const beside = freeSlot(node, page, margin, "column");
+  if (beside) return drop(beside);
+  for (let guard = 0; guard < 8; guard += 1) {
+    const box = node.boundsLocal;
+    const nextW = Math.max(32, Math.round(box.width * 0.7));
+    const nextH = Math.max(32, Math.round(box.height * 0.7));
+    if (nextW >= box.width - 0.5 && nextH >= box.height - 0.5) break;
+    node.resize({
+      width: nextW,
+      height: nextH,
+      behavior: constants.ResizeBehavior.contain,
+      avoidScalingVisualDetailsIfPossible: false
+    });
+    const again = freeSlot(node, page, margin, "stack");
+    if (again) return drop(again);
+  }
+  const wrapped = freeSlot(node, page, margin, "column") || freeSlot(node, page, margin, "grid");
+  if (wrapped) drop(wrapped);
+}
+
+export function addHeading(heading) {
+  const page = editor.context.insertionParent;
+  const textNode = editor.createText(heading);
+  const cap = Math.min(72, Math.round(page.width / 16));
+  page.children.append(textNode);
+  textNode.fullContent.applyCharacterStyles(
+    { fontSize: cap, color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
+    { start: 0, length: heading.length }
+  );
+  placeOnPage(textNode, page);
+}
+
+export async function addImage(blob) {
+  const page = editor.context.insertionParent;
+  const bitmap = await editor.loadBitmapImage(blob);
+  const image = editor.createImageContainer(bitmap);
+  const margin = Math.round(Math.min(page.width, page.height) * 0.08);
+  const maxWidth = Math.max(32, page.width - margin * 2);
+  const maxHeight = Math.max(32, page.height - margin * 2);
+  page.children.append(image);
+  const box = image.boundsLocal;
+  if (box.width > maxWidth || box.height > maxHeight) {
+    image.resize({
+      width: maxWidth,
+      height: maxHeight,
+      behavior: constants.ResizeBehavior.contain,
+      avoidScalingVisualDetailsIfPossible: false
+    });
+  }
+  placeOnPage(image, page);
 }
 `;
 
@@ -161,15 +251,15 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
     apis.push({
       api: "editor.createText()",
       runtime: "document sandbox",
-      note: "Create the text in code.js. Read the page size from editor.context.insertionParent (use-text.md). Cap the font (Math.min(72, page width / 16)) and call resize() with constants.ResizeBehavior.contain for both width and height, and only when boundsLocal is larger than the page minus an 8% margin (resize-elements.md). Center the first heading with setPositionInParent, using centerPointLocal from boundsLocal (position-elements.md). Place the next heading below existing children or the selection, using boundsInParent, and keep that y inside the page. Do not leave the default 100pt text on the top-left origin, do not scale a short heading to the full page width, and do not stack every heading on the same point.",
+      note: "Create the text in code.js. Read the page size from editor.context.insertionParent (use-text.md). Cap the font (Math.min(72, page width / 16)) and call resize() with constants.ResizeBehavior.contain for both width and height, and only when boundsLocal is larger than the page minus an 8% margin (resize-elements.md). Center the first heading with setPositionInParent, using centerPointLocal from boundsLocal (position-elements.md). Place the next heading below existing children or the selection, using boundsInParent. When that slot would leave the page, move to the next column or shrink. Do not clamp a later heading onto the one above it. Do not leave the default 100pt text on the top-left origin, do not scale a short heading to the full page width, and do not stack every heading on the same point. An empty field shows \"Type a heading first.\" and adds nothing.",
       snippet: TEXT_INSIDE_PAGE
     });
   }
   if (needs.includes("image")) {
     apis.push({
-      api: "addOnUISdk.app.document.addImage()",
-      runtime: "iframe runtime",
-      note: "Insert the image from the panel. Document edits that follow stay in the sandbox."
+      api: "editor.loadBitmapImage() and editor.createImageContainer()",
+      runtime: "document sandbox",
+      note: "Build the image in the document sandbox and run it through placeOnPage, the same free-space layout as a heading (position-elements.md, resize-elements.md). Fit it to the page width and height minus a margin, then put it below existing content using boundsInParent. A centered addImage() covers the heading under it. When the page is full, wrap or shrink it the same way as a heading.",
     });
   }
   if (needs.includes("panel") || (design === "swc" && !needs.includes("oauth"))) {
@@ -257,11 +347,13 @@ export function verifyFeature({ dir, brief, build = true }) {
       problems.push("Styled text needs a style: font, size, or color.");
     }
     if (created.length && !textStaysOnPage(sandboxScans)) {
-      problems.push("Inserted text has no positioning or bounds. Read editor.context.insertionParent width and height (use-text.md), cap the font, and fit both width and height with resize() only when the text is larger than the page minus a margin (resize-elements.md). Center the first heading with setPositionInParent using boundsLocal or centerPointLocal (position-elements.md), and place the next one below existing content or the selection using boundsInParent so consecutive headings do not overlap. A fixed font size at the top-left origin runs off the left edge, and scaling a short heading to the full page width overflows the other edge.");
+      problems.push("Inserted text has no positioning or bounds. Read editor.context.insertionParent width and height (use-text.md), cap the font, and fit both width and height with resize() only when the text is larger than the page minus a margin (resize-elements.md). Center the first heading with setPositionInParent using boundsLocal or centerPointLocal (position-elements.md), and place the next one below existing content or the selection using boundsInParent so consecutive headings do not overlap. When the next slot would leave the page, move to the next column or shrink instead of clamping onto the heading above. A fixed font size at the top-left origin runs off the left edge, and scaling a short heading to the full page width overflows the other edge.");
     }
   }
-  if (needs.includes("image") && !named(calls, /(^|\.)(addImage|createImage)$/).length) {
-    problems.push("An image needs an addImage() or createImage() call.");
+  if (needs.includes("image")) {
+    const created = named(calls, /(^|\.)(addImage|createImage|createImageContainer|loadBitmapImage)$/);
+    if (!created.length) problems.push("An image needs an addImage(), createImageContainer(), or loadBitmapImage() call.");
+    else if (!imagePlacedWithContent(codeFiles)) problems.push("An image needs the same free-space placement as a heading. Fit it to the page width and height minus a margin, then place it below existing content with boundsInParent so it does not cover a heading. When the page is full, wrap to the next column or shrink, the same way as a heading. Centering the image on the page covers what is already there.");
   }
   if (needs.includes("panel")) {
     if (!panels.spectrum) {
@@ -300,6 +392,7 @@ export function verifyFeature({ dir, brief, build = true }) {
     if (!permissions.sandbox.includes("allow-downloads")) problems.push("A download needs entryPoints[].permissions.sandbox to include allow-downloads.");
   }
   if (controlFlow(codeFiles).unhandledThrow) problems.push("The code throws and nothing catches it.");
+  problems.push(...templateBoilerplate(dir));
   const visible = Boolean(panels.text || panels.controls);
   if ((html.length || panels.tags.length) && !visible && (needs.includes("panel") || needs.length)) problems.push("The panel is blank: no text and no control.");
   if (!needs.length) {
@@ -327,7 +420,8 @@ function textStaysOnPage(scans) {
     const capped = /Math\.min\s*\(\s*\d+/.test(source) && words.has("fontSize");
     const onlyShrink = /width\s*>\s*maxWidth/.test(source) && /height\s*>\s*maxHeight/.test(source);
     const stacked = (words.has("children") || words.has("selection")) && words.has("boundsInParent");
-    return positioned && bounds && page && bothAxes && capped && onlyShrink && stacked;
+    const overflow = /page\.width\s*\/\s*2\s*\+/.test(source);
+    return positioned && bounds && page && bothAxes && capped && onlyShrink && stacked && overflow;
   });
 }
 
@@ -381,6 +475,54 @@ function manifestIdentityProblems(manifest) {
     problems.push("The manifest needs a testId. ccweb-add-on-scripts rejects a developer manifest without one.");
   }
   return problems;
+}
+
+export function scrubTemplateChrome(dir, name) {
+  const display = manifestDisplayName(name) || "Add on";
+  let files = 0;
+  const walk = (folder) => {
+    let entries = [];
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") continue;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.html?$/i.test(entry.name)) {
+        const before = fs.readFileSync(full, "utf8");
+        let html = before.replace(/<title>\s*Get Started\s*<\/title>/gi, `<title>${display}</title>`);
+        html = html.replace(/content=(["'])([\s\S]*?)\1/gi, (match, quote, value) => {
+          if (!/Adobe,\s*Express,\s*Add-On|Get started with Add-on development/i.test(value)) return match;
+          return `content=${quote}${display}${quote}`;
+        });
+        if (html !== before) {
+          fs.writeFileSync(full, html);
+          files += 1;
+        }
+      }
+    }
+  };
+  walk(dir);
+  return files;
+}
+
+function templateBoilerplate(dir) {
+  const problems = [];
+  const walk = (folder) => {
+    let entries = [];
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") continue;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.html?$/i.test(entry.name)) {
+        const html = fs.readFileSync(full, "utf8");
+        if (/<title>\s*Get Started\s*<\/title>/i.test(html)) problems.push("The page title is still the template's Get Started. Use the add-on name.");
+        if (/Adobe,\s*Express,\s*Add-On/i.test(html)) problems.push("The template meta keywords still list Adobe, Express, and Add-On. Replace that meta with the add-on's own words. It is not a finding about the add-on's name.");
+      }
+    }
+  };
+  walk(dir);
+  return [...new Set(problems)];
 }
 
 export function applyManifestName(dir, name) {

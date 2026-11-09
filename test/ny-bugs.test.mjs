@@ -10,7 +10,7 @@ import { findChrome } from "../.claude/skills/express-addon-review/scripts/lib/c
 import { launch } from "../.claude/skills/express-addon-review/scripts/lib/cdp.mjs";
 import { mutate, publishAsk, startSession } from "../.claude/skills/express-addon-review/scripts/lib/session.mjs";
 import { checkJsSyntax, controlFlow, storageKinds } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
-import { CREATE_CCWEB_ADD_ON, MANIFEST_NAME, TEXT_INSIDE_PAGE, applyManifestName, manifestDisplayName, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
+import { CREATE_CCWEB_ADD_ON, MANIFEST_NAME, TEXT_INSIDE_PAGE, applyManifestName, manifestDisplayName, scrubTemplateChrome, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
 import { classifyFeature, plainSentence } from "../.claude/skills/express-addon-develop/scripts/lib/feasibility.mjs";
 import { developNext } from "../.claude/skills/express-addon-develop/scripts/lib/flow.mjs";
 import { listingFrom } from "../.claude/skills/express-addon-develop/scripts/lib/listing-copy.mjs";
@@ -121,6 +121,7 @@ test("NY2 a real SWC panel is judged from its script, and a loading placeholder 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ny2-"));
   fs.cpSync(path.join(swc, "src"), path.join(dir, "src"), { recursive: true });
   applyManifestName(dir, "heading-panel");
+  scrubTemplateChrome(dir, "heading-panel");
   fs.writeFileSync(path.join(dir, "src/sandbox/code.js"), TEXT_INSIDE_PAGE);
   const htmlPath = path.join(dir, "src/index.html");
   const html = fs.readFileSync(htmlPath, "utf8").replace("</body>", "<p>Loading Heading Image…</p></body>");
@@ -143,6 +144,7 @@ test("b v2 and two variants fail on a real SWC template, and the real button pas
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ny-b-"));
     fs.cpSync(path.join(swc, "src"), path.join(dir, "src"), { recursive: true });
     applyManifestName(dir, "heading-panel");
+    scrubTemplateChrome(dir, "heading-panel");
     return dir;
   };
   const replaceRender = (dir, body) => {
@@ -242,7 +244,7 @@ export function addHeading(heading) {
     const children = { items: [], append(node) { this.items.push(node); }, [Symbol.iterator]() { return this.items[Symbol.iterator](); } };
     const page = { width: pageW, height: pageH, children };
     const editor = { context: { insertionParent: page, selection: [] }, createText: (value) => new Text(value) };
-    const body = source.replace(/^import[^\n]*\n/gm, "").replace(/export function/g, "function");
+    const body = source.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
     const fn = new Function("editor", "constants", `${body}\nreturn addHeading;`)(editor, { ResizeBehavior: { contain: "contain" } });
     fn(text);
     const node = page.children.items[0];
@@ -314,7 +316,7 @@ export function addHeading(heading) {
     return { page, editor };
   }
   function load(editor) {
-    const body = TEXT_INSIDE_PAGE.replace(/^import[^\n]*\n/gm, "").replace(/export function/g, "function");
+    const body = TEXT_INSIDE_PAGE.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
     return new Function("editor", "constants", `${body}\nreturn addHeading;`)(editor, { ResizeBehavior: { contain: "contain" } });
   }
   function boxOf(node) {
@@ -368,6 +370,8 @@ test("NY8 feasibility evidence is plain text", () => {
   const raw = "Use `editor.createRectangle()`, `editor.createText()` - Create content<br/>• `editor.createText()`.";
   const plain = plainSentence(raw);
   assert.doesNotMatch(plain, /`|<br|•/);
+  const encoded = plainSentence("createRectangle(), editor.createText() - Create content&lt;br/&gt;• editor.");
+  assert.doesNotMatch(encoded, /&lt;|&gt;|<br|br\/|`|•/);
   const page = `The iframe can call editor.createRectangle(), editor.createText() - Create content<br/>• editor.createText() for the document sandbox.`;
   const found = classifyFeature("Add a heading to the document", {
     architecture: page,
@@ -375,7 +379,7 @@ test("NY8 feasibility evidence is plain text", () => {
     guide: "Spectrum Web Components",
     label: "fresh"
   });
-  assert.doesNotMatch(found.summary, /`|<br/);
+  assert.doesNotMatch(found.summary, /`|<br|createRectangle|br\//);
 });
 
 test("NY9 a failed record is not a finished review", () => {
@@ -715,6 +719,10 @@ test("NY11 a sudo shim and a Chrome profile are removed", { ...browser, timeout:
   const page = await launch({ width: 400, height: 300 });
   assert.match(page.profile, /express-addon-review-cdp-/);
   assert.equal(fs.existsSync(page.profile), true);
+  assert.ok(page.scratch.startsWith(page.profile));
+  assert.equal(fs.existsSync(page.scratch), true);
+  await page.goto("about:blank");
   await page.close();
   assert.equal(fs.existsSync(page.profile), false);
+  assert.equal(fs.existsSync(page.scratch), false);
 });

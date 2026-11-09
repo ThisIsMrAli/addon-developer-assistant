@@ -286,14 +286,16 @@ export async function openDevServer({
     return { ok: false, trusted: false, outcome: "failed", error: prepared.error || "The local dev CA was not created.", warning: prepared.warning || SSL_WARNING };
   }
   const guard = sudoGuard();
+  let child;
   try {
-    const child = spawnImpl("npm", ["start", "--", "--analytics", "off"], {
+    child = spawnImpl("npm", ["start", "--", "--analytics", "off"], {
       cwd,
       detached: true,
       stdio: "ignore",
       env: { ...process.env, CI: "1", PATH: `${guard}${path.delimiter}${process.env.PATH || ""}` }
     });
     if (child && typeof child.unref === "function") child.unref();
+    holdSudoGuard(child, guard);
     const started = Date.now();
     while (!caReady()) {
       if (Date.now() - started >= timeoutMs) {
@@ -306,17 +308,33 @@ export async function openDevServer({
       return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: setup.error || "The dev CA was not trusted.", setup, warning: prepared?.warning || SSL_WARNING };
     }
     const remaining = Math.max(0, timeoutMs - (Date.now() - started));
-    const checked = await waitForDevServer({ cwd, child, check, identify, sleep, timeoutMs: remaining, intervalMs });
-    return { ...checked, setup: { ...(setup && typeof setup === "object" ? setup : {}), ca: prepared?.action || "", warning: prepared?.warning || SSL_WARNING }, warning: prepared?.warning || SSL_WARNING };
-  } finally {
+    const checked = await waitForDevServer({ cwd, child, guard, check, identify, sleep, timeoutMs: remaining, intervalMs });
+    return { ...checked, guard, setup: { ...(setup && typeof setup === "object" ? setup : {}), ca: prepared?.action || "", warning: prepared?.warning || SSL_WARNING }, warning: prepared?.warning || SSL_WARNING };
+  } catch (error) {
     releaseSudoGuard(guard);
+    throw error;
   }
 }
 
-export async function waitForDevServer({ cwd, spawnImpl = spawn, child = null, check = checkTrusted, identify = async () => ({ ok: true }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutMs = 45000, intervalMs = 1000 } = {}) {
+function holdSudoGuard(child, guard) {
+  const listen = child && (typeof child.once === "function" ? child.once.bind(child) : typeof child.on === "function" ? child.on.bind(child) : null);
+  if (listen) listen("exit", () => releaseSudoGuard(guard));
+}
+
+export async function waitForDevServer({ cwd, spawnImpl = spawn, child = null, guard = "", check = checkTrusted, identify = async () => ({ ok: true }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutMs = 45000, intervalMs = 1000 } = {}) {
   if (!cwd) return { ok: false, outcome: "failed", error: "No add-on folder to serve.", trusted: false };
-  const startedChild = child || spawnImpl("npm", ["start", "--", "--analytics", "off"], { cwd, detached: true, stdio: "ignore" });
-  if (!child && startedChild && typeof startedChild.unref === "function") startedChild.unref();
+  let startedChild = child;
+  if (!startedChild) {
+    const ownGuard = guard || sudoGuard();
+    startedChild = spawnImpl("npm", ["start", "--", "--analytics", "off"], {
+      cwd,
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, CI: "1", PATH: `${ownGuard}${path.delimiter}${process.env.PATH || ""}` }
+    });
+    if (startedChild && typeof startedChild.unref === "function") startedChild.unref();
+    holdSudoGuard(startedChild, ownGuard);
+  }
   const started = Date.now();
   let last = { ok: false, trusted: false, error: "not checked" };
   do {

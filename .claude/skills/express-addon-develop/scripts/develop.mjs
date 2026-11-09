@@ -22,7 +22,7 @@ import { addShot, appendAnswerLine, publishAsk, readMerged, setListing } from ".
 import { originAsk } from "./lib/flow.mjs";
 import { fetchDevDocs, pagesForBrief } from "./lib/docs-live.mjs";
 import { classifyFeature, pagesFromDisk } from "./lib/feasibility.mjs";
-import { applyManifestName, gate, implementationHandoff, scaffoldProject, verifyFeature } from "./lib/implement.mjs";
+import { applyManifestName, gate, implementationHandoff, scaffoldProject, scrubTemplateChrome, verifyFeature } from "./lib/implement.mjs";
 import { fillListingDir, listingFrom } from "./lib/listing-copy.mjs";
 import { buildProject, packageProject } from "./lib/package-addon.mjs";
 import { homeDir, liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
@@ -219,7 +219,10 @@ function implement() {
     }
   }
   const existingAddon = session.develop?.folder === "existing";
-  if (!existingAddon) applyManifestName(dir, session.addon?.name);
+  if (!existingAddon) {
+    applyManifestName(dir, session.addon?.name);
+    scrubTemplateChrome(dir, session.addon?.name);
+  }
   else patchDevelop(out, { nameLeft: readManifestName(dir) });
   const pages = (session.docs?.pages || [])
     .filter((page) => /architecture|document-api|implementation-guide|use-text|position-elements|resize-elements|use-images|oauth2|create-renditions/.test(page.id || ""))

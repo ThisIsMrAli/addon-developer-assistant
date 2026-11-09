@@ -15,7 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { ensureServer, readSources, toNotes, walkPanel } from "./lib/audit.mjs";
+import { ensureServer, readSources, toNotes, uncaughtMessages, walkPanel } from "./lib/audit.mjs";
 import { findChrome, NO_CHROME } from "./lib/chrome.mjs";
 import { reminder } from "./lib/next.mjs";
 import { resolveOut } from "./lib/paths.mjs";
@@ -123,7 +123,7 @@ async function main() {
   say("Working out where in the code each problem is");
   const sources = readSources(report.addonDir || project);
   const found = toNotes(result.states, sources, { licensed });
-  addConsoleNotes(found, result.seen, target);
+  addConsoleNotes(found, result.seen, target, result.actions);
 
   dropAutoShots(out);
   const shotFor = new Map();
@@ -269,16 +269,19 @@ async function getLicense(out) {
   }
 }
 
-function addConsoleNotes(found, seen, url) {
+function addConsoleNotes(found, seen, url, actions = []) {
   const origin = new URL(url).origin;
-  if (seen.exceptions.length) {
-    const unique = [...new Set(seen.exceptions)].slice(0, 3);
+  const crashed = [...new Set([...(seen.exceptions || []), ...uncaughtMessages(seen.console)])];
+  const failedActions = (actions || []).filter((action) => action && action.ok === false && action.error);
+  if (crashed.length || failedActions.length) {
+    const unique = [...crashed, ...failedActions.map((action) => `${action.label}: ${action.error}`)].slice(0, 3);
+    const count = crashed.length + failedActions.length;
     found.push({
       key: "script-error",
       rule: "script-error",
       severity: "error",
       screen: "Whole panel",
-      text: `The panel threw ${seen.exceptions.length} script error${seen.exceptions.length === 1 ? "" : "s"} while it was walked: ${unique.join(" | ")}. Fix: open the console on that screen and fix the first error.`,
+      text: `The panel threw ${count} script error${count === 1 ? "" : "s"} while it was walked: ${unique.join(" | ")}. Fix: open the console on that screen and fix the first error.`,
       themes: [],
       shotFile: ""
     });

@@ -1,8 +1,64 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
+import { parseSource } from "./code-scan.mjs";
 
 const SDK_URL = "https://new.express.adobe.com/static/add-on-sdk/sdk.js";
+
+/** A 1×1 PNG. Blob(["png"]) is not a PNG, and the audit then reports image-broken. */
+export const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+export function pngBytes() {
+  return Buffer.from(PNG_BASE64, "base64");
+}
+
+/**
+ * Methods the sandbox passes to runtime.exposeApi, plus the panel's `_sandboxProxy.method()` calls.
+ * The stand-in has to answer the add-on's API, not only the template's createRectangle.
+ */
+export function exposedSandboxMethods(source) {
+  const text = String(source || "");
+  const found = new Set();
+  const parsed = parseSource("sandbox.js", text);
+  const objects = new Map();
+  const visit = (node) => {
+    if (!node || typeof node !== "object" || typeof node.type !== "string") return;
+    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && node.init?.type === "ObjectExpression") {
+      objects.set(node.id.name, node.init);
+    }
+    if (node.type === "CallExpression") {
+      const callee = node.callee;
+      const name = callee?.type === "Identifier" ? callee.name : callee?.property?.name;
+      if (name === "exposeApi" && node.arguments?.[0]) addObject(node.arguments[0]);
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object" && typeof value.type === "string") visit(value);
+    }
+  };
+  const addObject = (node) => {
+    const object = node?.type === "Identifier" ? objects.get(node.name) : node?.type === "ObjectExpression" ? node : null;
+    if (!object) return;
+    for (const prop of object.properties || []) {
+      if (prop.type === "SpreadElement") continue;
+      const key = prop.key?.name || prop.key?.value;
+      if (typeof key === "string" && /^[A-Za-z_]/.test(key)) found.add(key);
+    }
+  };
+  if (parsed.ast) visit(parsed.ast);
+  for (const match of text.matchAll(/_sandboxProxy\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) found.add(match[1]);
+  return [...found];
+}
+
+export function standInSource(methods = []) {
+  const names = [...new Set(methods.filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))];
+  if (!names.length) return STANDIN_SOURCE;
+  const body = names.map((name) => `        ${name}(...args) { return { ok: true, api: ${JSON.stringify(name)}, args }; }`).join(",\n");
+  const start = STANDIN_SOURCE.indexOf("apiProxy: async () => ({");
+  const end = STANDIN_SOURCE.indexOf("      }),", start);
+  return `${STANDIN_SOURCE.slice(0, start)}apiProxy: async () => ({\n${body}\n      }),${STANDIN_SOURCE.slice(end + "      }),".length)}`;
+}
 
 export const STANDIN_SOURCE = `/**
  * SDK STAND-IN
@@ -31,7 +87,10 @@ const sdk = {
     off() {},
     document: {
       addImage: async () => ({ title: "image" }),
-      createRenditions: async () => [{ blob: new Blob(["png"], { type: "image/png" }) }],
+      createRenditions: async () => {
+        const bytes = Uint8Array.from(atob("${PNG_BASE64}"), (char) => char.charCodeAt(0));
+        return [{ blob: new Blob([bytes], { type: "image/png" }) }];
+      },
       exportAllowed: async () => true
     },
     oauth: {
@@ -44,7 +103,7 @@ const sdk = {
     runtime: {
       type: RuntimeType.panel,
       apiProxy: async () => ({
-        createRectangle() { return { width: 240, height: 180 }; }
+        createRectangle(...args) { return { ok: true, api: "createRectangle", args }; }
       }),
       exposeApi() {}
     },
@@ -77,7 +136,19 @@ export async function serveWithStandIn(sourceDir) {
   const root = fs.mkdtempSync(path.join(fs.realpathSync(osTmp()), "express-standin-"));
   copyTree(sourceDir, root);
   rewriteTree(root);
-  fs.writeFileSync(path.join(root, "sdk-stand-in.js"), STANDIN_SOURCE);
+  const methods = [];
+  const collect = (folder) => {
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) collect(full);
+      else if (/\.(js|mjs|cjs)$/i.test(entry.name) && fs.statSync(full).size < 2_000_000) {
+        methods.push(...exposedSandboxMethods(fs.readFileSync(full, "utf8")));
+      }
+    }
+  };
+  collect(root);
+  fs.writeFileSync(path.join(root, "sdk-stand-in.js"), standInSource(methods));
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
@@ -106,7 +177,7 @@ export async function serveWithStandIn(sourceDir) {
 }
 
 function osTmp() {
-  return process.env.TMPDIR || "/tmp";
+  return os.tmpdir();
 }
 
 function copyTree(from, to) {

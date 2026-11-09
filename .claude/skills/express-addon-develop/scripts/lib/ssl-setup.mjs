@@ -11,7 +11,14 @@ import path from "node:path";
 import { caPath } from "./devcert.mjs";
 
 export const SYSTEM_CA = "/usr/local/share/ca-certificates/devcert.crt";
-export const SSL_WARNING = "Adobe's SSL tool can use sudo to replace the system certificate at /usr/local/share/ca-certificates/devcert.crt. This skill does not run that, and it does not change the system trust store. An existing CA in this home is reused.";
+export const SSL_BASE = "Adobe's SSL tool can use sudo to replace the system certificate at /usr/local/share/ca-certificates/devcert.crt. This skill does not run that, and it does not change the system trust store.";
+export const SSL_WARNING = `${SSL_BASE} An existing CA in this home is reused.`;
+
+function sslWarning(action, ok = true) {
+  if ((action === "reuse" || action === "reuse-cert") && ok) return SSL_WARNING;
+  if (action === "local-setup" && ok) return `${SSL_BASE} A new CA was created in this home.`;
+  return SSL_BASE;
+}
 
 export function keyPath(home) {
   return path.join(home, ".config/Adobe/CCWebAddOn/devcert/certificate-authority/private-key.key");
@@ -53,16 +60,16 @@ export function inspectCa(home, exists = fs.existsSync) {
  * The system file is never written.
  */
 export function prepareDevCa({ home = process.env.HOME, exists = fs.existsSync, run = defaultRun } = {}) {
-  if (!home) return { ok: false, action: "missing-home", warning: SSL_WARNING, error: "HOME is not set." };
+  if (!home) return { ok: false, action: "missing-home", warning: sslWarning("missing-home", false), error: "HOME is not set." };
   const found = inspectCa(home, exists);
   const domain = domainCertPath(home);
-  if (found.complete && exists(domain)) return { ok: true, action: "reuse", warning: SSL_WARNING, domain, ...found };
+  if (found.complete && exists(domain)) return { ok: true, action: "reuse", warning: sslWarning("reuse"), domain, ...found };
   if (found.certPresent && !found.keyPresent) {
     if (exists(domain)) {
       return {
         ok: true,
         action: "reuse-cert",
-        warning: `${SSL_WARNING} The certificate is present and the private key is not, so nothing was regenerated.`,
+        warning: `${sslWarning("reuse-cert")} The certificate is present and the private key is not, so nothing was regenerated.`,
         domain,
         ...found
       };
@@ -70,7 +77,7 @@ export function prepareDevCa({ home = process.env.HOME, exists = fs.existsSync, 
     return {
       ok: false,
       action: "reuse-cert",
-      warning: SSL_WARNING,
+      warning: sslWarning("reuse-cert", false),
       error: "The CA certificate is present and the private key is not, so a localhost certificate could not be signed.",
       domain,
       ...found
@@ -90,16 +97,16 @@ export function prepareDevCa({ home = process.env.HOME, exists = fs.existsSync, 
       "-addext", "basicConstraints=critical,CA:TRUE"
     ]);
     if (result.status !== 0 || !exists(found.cert) || !exists(found.key)) {
-      return { ok: false, action: "local-setup", warning: SSL_WARNING, error: (result.stderr || result.stdout || "openssl could not create a local CA.").trim(), ...found };
+      return { ok: false, action: "local-setup", warning: sslWarning("local-setup", false), error: (result.stderr || result.stdout || "openssl could not create a local CA.").trim(), ...found };
     }
     action = "local-setup";
   }
   seedDevcertFiles(home);
   const signed = signLocalhost(home, run);
   if (signed.status !== 0 || !exists(domain)) {
-    return { ok: false, action, warning: SSL_WARNING, error: (signed.stderr || signed.stdout || "openssl could not sign the localhost certificate.").trim(), domain, ...inspectCa(home, exists) };
+    return { ok: false, action, warning: sslWarning(action, false), error: (signed.stderr || signed.stdout || "openssl could not sign the localhost certificate.").trim(), domain, ...inspectCa(home, exists) };
   }
-  return { ok: true, action, warning: SSL_WARNING, domain, ...inspectCa(home, exists) };
+  return { ok: true, action, warning: sslWarning(action), domain, ...inspectCa(home, exists) };
 }
 
 /** A sudo that refuses, so a child process cannot change the system trust store. */
