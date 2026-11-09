@@ -69,10 +69,13 @@ test("NP11 the fixed snippet uses no built-in the Express sandbox lacks and pass
   assert.deepEqual(problems, []);
 });
 
-test("NP11 the one-line fix of 1.0.5 passes record", () => {
+test("NP11 the one-line fix of 1.0.5 (Adobe's 1.0.6) no longer throws not a function; its layout bugs are NP2-NP12", () => {
   const fixed = SOURCE_105.replace("slots.at(-1)", "slots[slots.length - 1]");
   assert.notEqual(fixed, SOURCE_105);
-  assert.deepEqual(simulate(fixed).problems, []);
+  const { sim, problems } = simulate(fixed);
+  assert.equal(sim.ok, true, sim.error);
+  assert.equal(problems.some((line) => /not a function/.test(line)), false, problems.join("\n"));
+  assert.ok(problems.some((line) => /gaps between headings are uneven/.test(line)), "NP12 is caught on the 1.0.6 code");
 });
 
 test("NP11 code-scan flags every newer built-in, and leaves older ones and an own .at method alone", () => {
@@ -150,4 +153,69 @@ test("NP11 the browser stand-in tells the audit when the sandbox uses a built-in
   const source = standInSource(["addHeading"], { sandbox: "./code.js", engine: ["code.js:1 calls .at() in the document sandbox."] });
   assert.match(source, /would fail in Express/);
   assert.match(source, /calls \.at\(\) in the document sandbox/);
+});
+
+// NP12 / NP10 / NP2 / NP3 / NP5: the snippet's layout, measured with the stand-in that, like Express,
+// hands out a new object for a node each time (so the snippet has to match nodes by id).
+import { boxOf, loadSnippet } from "./sandbox-harness.mjs";
+
+test("NP12 heading gaps on the 1920x1080 landscape page are even (Alpha, Beta title, Gamma, then an image)", async () => {
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080 });
+  for (const text of ["Alpha", "Beta title", "Gamma"]) assert.equal(run.api.addHeading(text), "");
+  assert.equal(await run.api.addImage({ width: 640, height: 400 }), "");
+  const boxes = run.texts().map(boxOf);
+  const gaps = boxes.slice(1).map((box, i) => box.top - boxes[i].bottom);
+  assert.ok(Math.abs(gaps[0] - gaps[1]) <= 1, `gaps ${gaps.join(", ")}`);
+  assert.ok(Math.abs(boxes[0].top - Math.round(1080 * 0.08)) <= 1, "Alpha stays at the top margin");
+  const old = await loadSnippet(SOURCE_105.replace("slots.at(-1)", "slots[slots.length - 1]"), { width: 1920, height: 1080 });
+  for (const text of ["Alpha", "Beta title", "Gamma"]) old.api.addHeading(text);
+  const oldBoxes = old.texts().map(boxOf);
+  const oldGaps = oldBoxes.slice(1).map((box, i) => box.top - oldBoxes[i].bottom);
+  assert.ok(Math.max(...oldGaps) > Math.min(...oldGaps) * 3, `the 1.0.6 code reproduces the Express gap: ${oldGaps.join(", ")}`);
+});
+
+test("NP10 placed headings keep their place when more is added, including one the user moved", async () => {
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080 });
+  run.api.addHeading("One");
+  const [first] = run.texts();
+  first.setPositionInParent({ x: 300, y: 300 }, first.centerPointLocal);
+  const moved = boxOf(run.texts()[0]);
+  run.api.addHeading("Two");
+  const two = boxOf(run.texts()[1]);
+  await run.api.addImage({ width: 640, height: 400 });
+  run.api.addHeading("Three");
+  assert.deepEqual(boxOf(run.texts()[0]), moved);
+  assert.deepEqual(boxOf(run.texts()[1]), two);
+});
+
+test("NP2 a locked logo and footer are content: headings do not cover them", async () => {
+  const existing = [{ x: 860, y: 60, width: 200, height: 120, locked: true, id: "logo" }, { x: 0, y: 980, width: 1920, height: 100, locked: true, id: "footer" }];
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080, existing });
+  for (const text of ["One", "Two", "Three"]) assert.equal(run.api.addHeading(text), "");
+  for (const box of run.texts().map(boxOf)) {
+    for (const item of existing) {
+      const hit = box.left < item.x + item.width && box.right > item.x && box.top < item.y + item.height && box.bottom > item.y;
+      assert.equal(hit, false, `${JSON.stringify(box)} covers ${item.id}`);
+    }
+  }
+});
+
+test("NP3 a 75-character heading on an empty square page wraps instead of being refused", async () => {
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1080, height: 1080 });
+  const text = "A heading of about seventy-five characters that must wrap on a square page";
+  assert.equal(run.api.addHeading(text), "");
+  const [node] = run.texts();
+  assert.equal(node.layout.type, DOCUMENTED_CONSTANTS.TextLayout.autoHeight);
+  assert.ok(fontSizeOf(node) >= 18);
+  const box = boxOf(node);
+  assert.ok(box.left >= 80 && box.right <= 1000, JSON.stringify(box));
+});
+
+test("NP5 tiny images are placed at 48 px or more, and too-thin ones are refused with a message", async () => {
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1080, height: 1080 });
+  assert.equal(await run.api.addImage({ width: 2, height: 2 }), "");
+  assert.match(await run.api.addImage({ width: 1, height: 1000 }), /too thin/);
+  assert.match(await run.api.addImage({ width: 3000, height: 10 }), /too thin/);
+  assert.equal(await run.api.addImage({ width: 40, height: 30 }), "");
+  for (const box of run.images().map(boxOf)) assert.ok(Math.min(box.width, box.height) >= 47.5, JSON.stringify(box));
 });

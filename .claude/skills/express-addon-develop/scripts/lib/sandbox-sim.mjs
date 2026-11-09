@@ -22,7 +22,11 @@ export const SCENARIOS = [
   { name: "full-bleed background", width: 1920, height: 1080, background: true, steps: ["h:One", "h:Two", "i:1600x900", "h:Three"], expectAll: true, aligned: true },
   { name: "unlocked full-bleed background", width: 1080, height: 1080, background: "unlocked", steps: ["h:One", "h:Two", "h:Three"], expectAll: true, aligned: true },
   { name: "thirty headings", width: 1920, height: 1080, steps: Array.from({ length: 30 }, (_, i) => `h:Heading ${i + 1}`), expectFirst: 6, order: true },
-  { name: "small page fills up", width: 320, height: 200, steps: Array.from({ length: 12 }, (_, i) => `h:Heading number ${i + 1}`), expectFirst: 1, order: true }
+  { name: "small page fills up", width: 320, height: 200, steps: Array.from({ length: 12 }, (_, i) => `h:Heading number ${i + 1}`), expectFirst: 1, order: true },
+  { name: "landscape even gaps", width: 1920, height: 1080, steps: ["h:Alpha", "h:Beta title", "h:Gamma", "i:640x400"], expectAll: true, aligned: true, evenGaps: true, stable: true },
+  { name: "locked logo and footer", width: 1920, height: 1080, existing: [{ x: 860, y: 60, width: 200, height: 120, locked: true, id: "logo" }, { x: 0, y: 980, width: 1920, height: 100, locked: true, id: "footer" }], steps: ["h:One", "h:Two", "h:Three"], expectAll: true },
+  { name: "long heading on an empty square page", width: 1080, height: 1080, steps: ["h:A heading of about seventy-five characters that must wrap on a square page"], expectAll: true },
+  { name: "tiny and thin images", width: 1080, height: 1080, steps: ["i:2x2", "i:1x1000", "i:3000x10", "i:40x30"], expectFirst: 1 }
 ];
 
 /** Runs the scenarios. `entry` is the sandbox file that calls runtime.exposeApi. */
@@ -113,7 +117,21 @@ export function placementProblems(sim, { text = true, image = true } = {}) {
         }
       }
     }
-    const final = steps.at(-1)?.after || [];
+    // NP10: a heading already on the page keeps its place and size when the next item is added,
+    // unless the layout really changed (another column, or a smaller font for every heading).
+    if (scenario.stable) {
+      for (let i = 1; i < steps.length; i += 1) {
+        const before = steps[i - 1].after.filter((node) => node.ours && node.kind === "text");
+        const after = steps[i].after;
+        for (const node of before) {
+          const now = after.find((item) => item.id === node.id);
+          if (!now) continue;
+          const moved = Math.abs(now.x - node.x) > 0.5 || Math.abs(now.y - node.y) > 0.5 || Math.abs(now.w - node.w) > 0.5;
+          if (moved) { add(`Heading "${node.text}" moved from x ${round(node.x)}, y ${round(node.y)} to x ${round(now.x)}, y ${round(now.y)} when ${steps[i].kind === "h" ? `"${steps[i].value}"` : "an image"} was added ${where}, although the page had room. Leave placed headings where they are.`); break; }
+        }
+      }
+    }
+    const final = steps[steps.length - 1]?.after || [];
     const headings = final.filter((node) => node.ours && node.kind === "text").sort((a, b) => a.order - b.order);
     if (scenario.aligned && headings.length > 1) {
       const sameCentre = headings.every((node) => near(node.x + node.w / 2, headings[0].x + headings[0].w / 2, 2));
@@ -127,6 +145,14 @@ export function placementProblems(sim, { text = true, image = true } = {}) {
           break;
         }
       }
+    }
+    // NP12: the gap between consecutive headings is the same down the column.
+    if (scenario.evenGaps && headings.length > 2) {
+      const gaps = [];
+      for (let i = 1; i < headings.length; i += 1) gaps.push(headings[i].y - (headings[i - 1].y + headings[i - 1].h));
+      const low = Math.min(...gaps);
+      const high = Math.max(...gaps);
+      if (high - low > Math.max(2, low * 0.25)) add(`The gaps between headings are uneven ${where}: ${gaps.map(round).join(", ")} px. Measure each heading with boundsLocal and use one gap.`);
     }
     if (scenario.order && headings.length > 1) {
       const columns = [];

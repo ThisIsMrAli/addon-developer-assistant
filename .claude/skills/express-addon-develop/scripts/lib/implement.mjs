@@ -98,18 +98,19 @@ export function briefNeeds(brief) {
 }
 
 /**
- * Document text and images that stay inside the current page.
- * Page size is insertionParent.width and height (use-text.md).
- * The visual center is centerPointLocal, from boundsLocal (position-elements.md).
- * resize() with ResizeBehavior.contain fits both the width and the height (resize-elements.md).
- * Headings stack in one centred column. When it is full, the headings are laid out again in
- * two or three columns that read left to right, at the same readable size. Images sit below the
- * headings and move down when a heading needs the room. A locked or full-bleed background is not
- * content, so it does not fill the page.
- * createImageContainer runs in the afterAsyncCallback of keepContentActiveDuringAsync, the form the
- * Editor reference documents after loadBitmapImage. Its initialSize keeps the bitmap's aspect ratio:
- * the reference says it "Must have the same aspect ratio as bitmapData", and Express throws
- * "Aspect ratio of initialSize must match aspect ratio of bitmapData to within 1%" otherwise.
+ * The handoff snippet for headings and images in the document sandbox.
+ * - Nodes are matched by id and found again in page.children on every call: Express hands out a new
+ *   object for a node each time, and a reference must not be held across calls (NP12).
+ * - A new heading goes after the last one, in the same column, and nothing else moves (NP10). Only
+ *   when it does not fit is everything laid out again: one to three columns that read left to right,
+ *   the font from the page cap down to 24 px before another column opens, then down to 18 px.
+ *   A heading wider than its column wraps with TextLayout.autoHeight before it shrinks (NP3).
+ *   Every heading gap is the same, measured from the real text bounds (boundsLocal) (NP12).
+ * - Only a full-page or near full-page node is background. A locked logo or footer is content (NP2).
+ * - Images go below the headings, at least 48 px on the short side, or are refused with a message (NP5).
+ * - createImageContainer runs in the afterAsyncCallback of keepContentActiveDuringAsync. Its initialSize
+ *   keeps the bitmap's aspect ratio (Express rejects one more than 1% off).
+ * - No built-in newer than the sandbox's QuickJS (no .at, findLast, Object.hasOwn) (NP11).
  */
 export const TEXT_INSIDE_PAGE = `import addOnSandboxSdk from "add-on-sdk-document-sandbox";
 import { editor, constants } from "express-document-sdk";
@@ -117,92 +118,114 @@ import { editor, constants } from "express-document-sdk";
 const { runtime } = addOnSandboxSdk.instance;
 
 const FULL_MESSAGE = "The page is full. This stays at a readable size, so it was not added.";
-const MIN_TEXT_HEIGHT = Math.round(24 * 1.2);
-const MIN_IMAGE_SIDE = 64;
+const SMALL_IMAGE_MESSAGE = "This image is too thin to show at 48 px or more on each side inside the page, so it was not added.";
+const READABLE_FONT = 24;
+const MIN_FONT = 18;
+const MIN_IMAGE_SIDE = 48;
 const MAX_COLUMNS = 3;
 const IMAGE_GAP = 12;
-const headings = [];
-const images = [];
+const TEXT_COLOR = { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 };
+
+// Express returns a new object for a node each time the API hands one out, and a node reference
+// must not be held across calls. So the layout keeps only node ids (Node.id, stable for the node)
+// and finds the nodes again in page.children on every call. Never compare nodes with === or a Set.
+const pages = {};
+
+function pageState(page) {
+  if (!pages[page.id]) pages[page.id] = { columns: 1, size: 0, headings: [], images: [] };
+  return pages[page.id];
+}
+
+function nodesById(page) {
+  const found = {};
+  for (const item of page.children) found[item.id] = item;
+  return found;
+}
 
 function marginOf(page) {
   return Math.round(Math.min(page.width, page.height) * 0.08);
 }
 
-function gapFor(height) {
-  return Math.max(8, Math.round(Math.max(height, 1) * 0.15));
+function capOf(page) {
+  return Math.min(72, Math.round(page.width / 16));
+}
+
+/** One gap for every heading on the page, so the spacing stays even whatever each heading wraps to. */
+function headingGap(page) {
+  return Math.max(8, Math.round(capOf(page) * 0.3));
 }
 
 function rectsOverlap(a, b) {
   return a.x < b.x + b.width - 0.5 && a.x + a.width > b.x + 0.5 && a.y < b.y + b.height - 0.5 && a.y + a.height > b.y + 0.5;
 }
 
-function onThisPage(node, page) {
-  const parent = node.parent;
-  return Boolean(parent) && (parent === page || (parent.id !== undefined && parent.id === page.id));
-}
-
-function isBackground(item, page) {
-  if (item.locked) return true;
-  const box = item.boundsInParent;
+/** Only a full-page (or near full-page) node is background. A locked logo or footer is content. */
+function isBackground(box, page) {
   return box.width >= page.width * 0.95 && box.height >= page.height * 0.95;
 }
 
-function obstacles(page, ours) {
+function obstacles(page, skip) {
   const blocked = [];
   for (const item of page.children) {
-    if (ours.has(item) || !item.boundsInParent || isBackground(item, page)) continue;
-    blocked.push(item.boundsInParent);
+    if (skip.indexOf(item.id) >= 0) continue;
+    const box = item.boundsInParent;
+    if (!box || isBackground(box, page)) continue;
+    blocked.push(box);
   }
   return blocked;
 }
 
-function scaledSize(entry, maxWidth, maxHeight) {
-  const scale = Math.min(1, maxWidth / entry.width, maxHeight / entry.height);
-  return { width: entry.width * scale, height: entry.height * scale };
-}
-
-function columnCentre(page, columns, column) {
+function column(page, columns, index) {
   const margin = marginOf(page);
   const usable = page.width - margin * 2;
   const gutter = columns > 1 ? Math.round(usable * 0.04) : 0;
   const width = (usable - gutter * (columns - 1)) / columns;
-  return { centre: margin + width / 2 + column * (width + gutter), width };
+  return { centre: margin + width / 2 + index * (width + gutter), width };
 }
 
-function planHeadings(page, list, columns, blocked) {
-  const margin = marginOf(page);
-  const bottom = page.height - margin;
-  const slots = [];
-  let column = 0;
-  let y = margin;
-  for (const entry of list) {
-    let { centre, width } = columnCentre(page, columns, column);
-    const size = scaledSize(entry, width, bottom - margin);
-    if (size.height < Math.min(entry.height, MIN_TEXT_HEIGHT) - 0.5) return null;
-    for (let guard = 0; guard < 200; guard += 1) {
-      const rect = { x: centre - size.width / 2, y, width: size.width, height: size.height };
-      if (rect.y + rect.height > bottom + 0.5) {
-        column += 1;
-        if (column >= columns) return null;
-        ({ centre, width } = columnCentre(page, columns, column));
-        y = margin;
-        continue;
-      }
-      const hit = blocked.find((box) => rectsOverlap(rect, box));
-      if (hit) {
-        y = hit.y + hit.height + gapFor(size.height);
-        continue;
-      }
-      slots.push({ entry, rect });
-      y += size.height + gapFor(size.height);
-      break;
-    }
-    if (!slots.length || slots[slots.length - 1].entry !== entry) return null;
+/** Font size, then wrap (TextLayout.autoHeight) only when the line is wider than the column. Returns the measured size. */
+function shapeHeading(node, size, maxWidth) {
+  node.fullContent.applyCharacterStyles({ fontSize: size, color: TEXT_COLOR }, { start: 0, length: node.fullContent.text.length });
+  if (node.layout.type !== constants.TextLayout.autoWidth) node.layout = { type: constants.TextLayout.autoWidth };
+  let box = node.boundsLocal;
+  let wrap = 0;
+  if (box.width > maxWidth + 0.5) {
+    wrap = Math.floor(maxWidth);
+    node.layout = { type: constants.TextLayout.autoHeight, width: wrap };
+    box = node.boundsLocal;
   }
-  return slots;
+  return { width: box.width, height: box.height, size, wrap };
 }
 
-function planImages(page, list, top, alone, blocked) {
+function restoreHeading(node, entry) {
+  node.fullContent.applyCharacterStyles({ fontSize: entry.size, color: TEXT_COLOR }, { start: 0, length: node.fullContent.text.length });
+  node.layout = entry.wrap ? { type: constants.TextLayout.autoHeight, width: entry.wrap } : { type: constants.TextLayout.autoWidth };
+}
+
+/** First free row in a column, from y down, clear of every blocked box. */
+function freeRow(page, centre, size, y, blocked, gap) {
+  const bottom = page.height - marginOf(page);
+  let top = y;
+  for (let guard = 0; guard < 400; guard += 1) {
+    const rect = { x: centre - size.width / 2, y: top, width: size.width, height: size.height };
+    if (rect.y + rect.height > bottom + 0.5) return null;
+    let hit = null;
+    for (const box of blocked) if (rectsOverlap(rect, box)) { hit = box; break; }
+    if (!hit) return rect;
+    top = hit.y + hit.height + gap;
+  }
+  return null;
+}
+
+function fontSteps(cap) {
+  const steps = [];
+  for (let size = cap; size > READABLE_FONT; size = Math.floor(size * 0.85)) steps.push(size);
+  steps.push(READABLE_FONT);
+  return steps;
+}
+
+/** Images fill the space below top, centred, each at least 48 px on its short side. */
+function planImages(page, list, top, blocked, alone) {
   const margin = marginOf(page);
   const bottom = page.height - margin;
   const usable = page.width - margin * 2;
@@ -213,102 +236,201 @@ function planImages(page, list, top, alone, blocked) {
   let y = top;
   for (const entry of list) {
     if (tallest <= 0) return null;
-    const size = scaledSize(entry, usable, tallest);
-    if (Math.min(size.width, size.height) < Math.min(MIN_IMAGE_SIDE, entry.width, entry.height) - 0.5) return null;
-    let placed = null;
-    for (let guard = 0; guard < 200 && !placed; guard += 1) {
-      const rect = { x: page.width / 2 - size.width / 2, y, width: size.width, height: size.height };
-      if (rect.y + rect.height > bottom + 0.5) return null;
-      const hit = blocked.find((box) => rectsOverlap(rect, box));
-      if (hit) y = hit.y + hit.height + IMAGE_GAP;
-      else placed = rect;
-    }
-    if (!placed) return null;
-    slots.push({ entry, rect: placed });
-    y = placed.y + placed.height + IMAGE_GAP;
+    const scale = Math.min(1, usable / entry.width, tallest / entry.height);
+    const size = { width: entry.width * scale, height: entry.height * scale };
+    if (Math.min(size.width, size.height) < MIN_IMAGE_SIDE - 0.5) return null;
+    const rect = freeRow(page, page.width / 2, size, y, blocked, IMAGE_GAP);
+    if (!rect) return null;
+    slots.push({ id: entry.id, kind: "image", rect });
+    y = rect.y + rect.height + IMAGE_GAP;
   }
   return slots;
 }
 
-/** Headings fill one centred column, then columns left to right. Images go below the headings. */
-function layout(page) {
-  const texts = headings.filter((entry) => onThisPage(entry.node, page));
-  const pictures = images.filter((entry) => onThisPage(entry.node, page));
-  const ours = new Set([...texts, ...pictures].map((entry) => entry.node));
-  const blocked = obstacles(page, ours);
-  for (let columns = 1; columns <= MAX_COLUMNS; columns += 1) {
-    const textSlots = planHeadings(page, texts, columns, blocked);
-    if (!textSlots) continue;
-    const top = textSlots.length ? Math.max(...textSlots.map((slot) => slot.rect.y + slot.rect.height)) + IMAGE_GAP : marginOf(page);
-    const imageSlots = planImages(page, pictures, top, !textSlots.length, blocked);
-    if (!imageSlots) continue;
-    return textSlots.concat(imageSlots);
+function lowest(rects, fallback) {
+  let bottom = fallback;
+  for (const rect of rects) bottom = Math.max(bottom, rect.y + rect.height + IMAGE_GAP);
+  return bottom;
+}
+
+function place(node, rect) {
+  const box = node.boundsLocal;
+  if (Math.abs(box.width - rect.width) > 0.5 || Math.abs(box.height - rect.height) > 0.5) {
+    node.resize({ width: rect.width, height: rect.height, behavior: constants.ResizeBehavior.contain, avoidScalingVisualDetailsIfPossible: false });
   }
+  node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, node.centerPointLocal);
+}
+
+/**
+ * Everything laid out again: headings in 1 to 3 columns that read left to right, the font from the
+ * page cap down to 24 px before another column opens, and as a last step down to 18 px. Images go below.
+ * Only used when the new item does not fit next to what is already on the page.
+ */
+function reflow(page, state, byId, extraImage) {
+  const margin = marginOf(page);
+  const gap = headingGap(page);
+  const ours = state.headings.map((entry) => entry.id).concat(state.images.map((entry) => entry.id));
+  if (extraImage) ours.push(extraImage.id);
+  const blocked = obstacles(page, ours);
+  const images = extraImage ? state.images.concat([extraImage]) : state.images;
+  const tries = [];
+  for (let columns = Math.max(1, state.columns); columns <= MAX_COLUMNS; columns += 1) {
+    for (const size of fontSteps(capOf(page))) tries.push({ columns, size });
+  }
+  for (let size = READABLE_FONT - 2; size >= MIN_FONT; size -= 2) tries.push({ columns: MAX_COLUMNS, size });
+  for (const attempt of tries) {
+    const slots = [];
+    let index = 0;
+    let y = margin;
+    let ok = true;
+    for (const entry of state.headings) {
+      const node = byId[entry.id];
+      let rect = null;
+      while (!rect && index < attempt.columns) {
+        const col = column(page, attempt.columns, index);
+        const shape = shapeHeading(node, attempt.size, col.width);
+        rect = freeRow(page, col.centre, shape, y, blocked, gap);
+        if (rect) slots.push({ id: entry.id, kind: "text", rect, column: index, shape });
+        else { index += 1; y = margin; }
+      }
+      if (!rect) { ok = false; break; }
+      y = rect.y + rect.height + gap;
+    }
+    if (!ok) continue;
+    const top = lowest(slots.map((slot) => slot.rect), margin);
+    const imageSlots = planImages(page, images, top, blocked.concat(slots.map((slot) => slot.rect)), !slots.length);
+    if (!imageSlots) continue;
+    return { columns: attempt.columns, size: attempt.size, slots: slots.concat(imageSlots) };
+  }
+  for (const entry of state.headings) restoreHeading(byId[entry.id], entry);
   return null;
 }
 
-function apply(slots) {
-  for (const { entry, rect } of slots) {
-    const node = entry.node;
-    const box = node.boundsLocal;
-    if (Math.abs(box.width - rect.width) > 0.5 || Math.abs(box.height - rect.height) > 0.5) {
-      node.resize({
-        width: rect.width,
-        height: rect.height,
-        behavior: constants.ResizeBehavior.contain,
-        avoidScalingVisualDetailsIfPossible: false
-      });
+function applyPlan(page, state, byId, plan) {
+  state.columns = plan.columns;
+  state.size = plan.size;
+  for (const slot of plan.slots) {
+    const node = byId[slot.id];
+    if (!node) continue;
+    place(node, slot.rect);
+    const list = slot.kind === "text" ? state.headings : state.images;
+    for (const entry of list) {
+      if (entry.id !== slot.id) continue;
+      entry.rect = slot.rect;
+      if (slot.shape) { entry.size = slot.shape.size; entry.wrap = slot.shape.wrap; entry.column = slot.column; }
     }
-    const fitted = node.boundsLocal;
-    const anchor = node.centerPointLocal || { x: fitted.x + fitted.width / 2, y: fitted.y + fitted.height / 2 };
-    node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, anchor);
   }
+}
+
+/** Drop entries whose node the user deleted. */
+function prune(state, byId) {
+  state.headings = state.headings.filter((entry) => byId[entry.id]);
+  state.images = state.images.filter((entry) => byId[entry.id]);
 }
 
 export function addHeading(heading) {
   const text = String(heading ?? "").trim();
   if (!text) return "Type a heading first.";
   const page = editor.context.insertionParent;
+  const state = pageState(page);
   const node = editor.createText(text);
   page.children.append(node);
-  const cap = Math.min(72, Math.round(page.width / 16));
-  node.fullContent.applyCharacterStyles(
-    { fontSize: cap, color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
-    { start: 0, length: text.length }
-  );
-  const box = node.boundsLocal;
-  headings.push({ node, width: box.width, height: box.height });
-  const slots = layout(page);
-  if (!slots) {
-    headings.pop();
+  const id = node.id;
+  let byId = nodesById(page);
+  prune(state, byId);
+  const gap = headingGap(page);
+  const size = state.size || capOf(page);
+  const last = state.headings.length ? state.headings[state.headings.length - 1] : null;
+  // First try: leave every heading where it is and put the new one after the last, in the same column.
+  const imageIds = state.images.map((entry) => entry.id);
+  const blocked = obstacles(page, [id].concat(imageIds));
+  let placed = null;
+  for (let index = last ? last.column : 0; index < state.columns && !placed; index += 1) {
+    const col = column(page, state.columns, index);
+    const shape = shapeHeading(node, size, col.width);
+    const start = last && index === last.column ? last.rect.y + last.rect.height + gap : marginOf(page);
+    const rect = freeRow(page, col.centre, shape, start, blocked, gap);
+    if (rect) placed = { rect, shape, column: index };
+  }
+  if (placed) {
+    const entry = { id, rect: placed.rect, size: placed.shape.size, wrap: placed.shape.wrap, column: placed.column };
+    state.headings.push(entry);
+    place(node, placed.rect);
+    // Images move only when the new heading needs their room.
+    const images = state.images.filter((item) => byId[item.id]);
+    const covered = images.some((item) => rectsOverlap(byId[item.id].boundsInParent, placed.rect) || byId[item.id].boundsInParent.y < placed.rect.y + placed.rect.height);
+    if (!covered) { state.size = size; return ""; }
+    const ours = state.headings.map((item) => item.id).concat(imageIds);
+    const top = lowest(state.headings.map((item) => item.rect), marginOf(page));
+    const imageSlots = planImages(page, images, top, obstacles(page, ours).concat(state.headings.map((item) => item.rect)), false);
+    if (imageSlots) {
+      for (const slot of imageSlots) place(byId[slot.id], slot.rect);
+      state.size = size;
+      return "";
+    }
+    state.headings.pop();
+  }
+  // Second try: lay everything out again (more columns, then a smaller font).
+  state.headings.push({ id, rect: null, size, wrap: 0, column: 0 });
+  byId = nodesById(page);
+  const plan = reflow(page, state, byId, null);
+  if (!plan) {
+    state.headings.pop();
     node.removeFromParent();
     return FULL_MESSAGE;
   }
-  apply(slots);
+  applyPlan(page, state, byId, plan);
   return "";
+}
+
+/** initialSize keeps the bitmap's aspect ratio: at most 512 px long, and at least 48 px short when that fits. */
+function initialSizeOf(bitmap) {
+  const longSide = Math.max(bitmap.width, bitmap.height);
+  const shortSide = Math.min(bitmap.width, bitmap.height);
+  const scale = Math.max(Math.min(1, 512 / longSide), MIN_IMAGE_SIDE / shortSide);
+  return { width: bitmap.width * scale, height: bitmap.height * scale };
 }
 
 export async function addImage(blob) {
   const page = editor.context.insertionParent;
   const bitmap = await editor.loadBitmapImage(blob);
-  const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
-  const initialSize = { width: bitmap.width * scale, height: bitmap.height * scale };
+  const initialSize = initialSizeOf(bitmap);
+  const margin = marginOf(page);
+  const usable = { width: page.width - margin * 2, height: page.height - margin * 2 };
+  const fitScale = Math.min(1, usable.width / initialSize.width, usable.height / initialSize.height);
+  if (Math.min(initialSize.width, initialSize.height) * fitScale < MIN_IMAGE_SIDE - 0.5) return SMALL_IMAGE_MESSAGE;
   let message = FULL_MESSAGE;
   await editor.keepContentActiveDuringAsync(
     page,
     async () => {},
     () => {
+      const state = pageState(page);
       const image = editor.createImageContainer(bitmap, { initialSize });
       page.children.append(image);
-      images.push({ node: image, width: initialSize.width, height: initialSize.height });
-      const slots = layout(page);
-      if (!slots) {
-        images.pop();
+      const entry = { id: image.id, width: initialSize.width, height: initialSize.height, rect: null };
+      let byId = nodesById(page);
+      prune(state, byId);
+      // First try: below everything this add-on placed, without moving anything.
+      const ours = state.headings.map((item) => item.id).concat(state.images.map((item) => item.id));
+      const placedRects = ours.map((id) => byId[id].boundsInParent);
+      const top = lowest(placedRects, margin);
+      const slots = planImages(page, [entry], top, obstacles(page, [entry.id]), !ours.length);
+      if (slots) {
+        entry.rect = slots[0].rect;
+        state.images.push(entry);
+        place(image, slots[0].rect);
+        message = "";
+        return;
+      }
+      byId = nodesById(page);
+      const plan = reflow(page, state, byId, entry);
+      if (!plan) {
         image.removeFromParent();
         message = FULL_MESSAGE;
         return;
       }
-      apply(slots);
+      state.images.push(entry);
+      applyPlan(page, state, byId, plan);
       message = "";
     }
   );

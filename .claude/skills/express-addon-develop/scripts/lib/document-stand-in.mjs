@@ -85,6 +85,23 @@ const FONT = Symbol("fontSize");
 const TEXT = Symbol("text");
 const BITMAP = Symbol("bitmap");
 const MEDIA = Symbol("media");
+const LAYOUT = Symbol("layout");
+
+// Express hands out a new JavaScript object for a node each time the API returns one (NP12: in real
+// Express, `ours.has(item)` over page.children never matched the node createText returned, so the
+// snippet treated its own headings as obstacles and the gaps doubled). The stand-in does the same:
+// every node it returns is a fresh wrapper, so `===`, Set and Map identity fail as in Express, and
+// `node.id` (classes/base-node.md: "A unique identifier for this node") is the way to match nodes.
+const REAL = new WeakMap();
+function handle(node) {
+  if (!node || typeof node !== "object") return node;
+  const target = REAL.get(node) || node;
+  const wrapper = new Proxy(target, {});
+  REAL.set(wrapper, target);
+  return wrapper;
+}
+/** The stand-in's own object behind a wrapper (for the measurement code, not for add-on code). */
+export function realNode(node) { return (node && REAL.get(node)) || node; }
 
 /** Font size the stand-in measured for a text node (not an Express property). */
 export function fontSizeOf(node) { return node ? node[FONT] : undefined; }
@@ -102,15 +119,16 @@ export function createDocument({ width = 1920, height = 1080, background = false
   class ItemList {
     constructor(owner) { this[OWNER] = owner; this[ITEMS] = []; }
     get length() { return this[ITEMS].length; }
-    get first() { return this[ITEMS][0]; }
-    get last() { return this[ITEMS][this[ITEMS].length - 1]; }
-    item(index) { return this[ITEMS][index]; }
-    indexOf(node) { return this[ITEMS].indexOf(node); }
-    toArray() { return this[ITEMS].slice(); }
-    [Symbol.iterator]() { return this[ITEMS].slice()[Symbol.iterator](); }
+    get first() { return handle(this[ITEMS][0]); }
+    get last() { return handle(this[ITEMS][this[ITEMS].length - 1]); }
+    item(index) { return handle(this[ITEMS][index]); }
+    indexOf(node) { return this[ITEMS].indexOf(realNode(node)); }
+    toArray() { return this[ITEMS].map(handle); }
+    [Symbol.iterator]() { return this[ITEMS].map(handle)[Symbol.iterator](); }
     append(...nodes) {
-      for (const node of nodes) {
-        if (!node || typeof node !== "object") throw new Error("append() needs a node.");
+      for (const given of nodes) {
+        if (!given || typeof given !== "object") throw new Error("append() needs a node.");
+        const node = realNode(given);
         const old = node[PARENT];
         if (old && old.children && old.children !== this) old.children[DROP](node);
         this[DROP](node);
@@ -118,14 +136,14 @@ export function createDocument({ width = 1920, height = 1080, background = false
         node[PARENT] = this[OWNER];
       }
     }
-    insertAfter(node, after) { this[DROP](node); const at = this[ITEMS].indexOf(after); this[ITEMS].splice(at < 0 ? this[ITEMS].length : at + 1, 0, node); node[PARENT] = this[OWNER]; }
-    insertBefore(node, before) { this[DROP](node); const at = this[ITEMS].indexOf(before); this[ITEMS].splice(at < 0 ? 0 : at, 0, node); node[PARENT] = this[OWNER]; }
+    insertAfter(given, after) { const node = realNode(given); this[DROP](node); const at = this[ITEMS].indexOf(realNode(after)); this[ITEMS].splice(at < 0 ? this[ITEMS].length : at + 1, 0, node); node[PARENT] = this[OWNER]; }
+    insertBefore(given, before) { const node = realNode(given); this[DROP](node); const at = this[ITEMS].indexOf(realNode(before)); this[ITEMS].splice(at < 0 ? 0 : at, 0, node); node[PARENT] = this[OWNER]; }
     moveAfter(node, after) { this.insertAfter(node, after); }
     moveBefore(node, before) { this.insertBefore(node, before); }
-    replace(oldNode, newNode) { const at = this[ITEMS].indexOf(oldNode); if (at < 0) return; this[ITEMS].splice(at, 1, newNode); oldNode[PARENT] = null; newNode[PARENT] = this[OWNER]; }
-    remove(...nodes) { for (const node of nodes) { this[DROP](node); node[PARENT] = null; } }
+    replace(oldGiven, newGiven) { const oldNode = realNode(oldGiven); const newNode = realNode(newGiven); const at = this[ITEMS].indexOf(oldNode); if (at < 0) return; this[ITEMS].splice(at, 1, newNode); oldNode[PARENT] = null; newNode[PARENT] = this[OWNER]; }
+    remove(...nodes) { for (const given of nodes) { const node = realNode(given); this[DROP](node); node[PARENT] = null; } }
     clear() { for (const node of this[ITEMS]) node[PARENT] = null; this[ITEMS] = []; }
-    [DROP](node) { const at = this[ITEMS].indexOf(node); if (at >= 0) this[ITEMS].splice(at, 1); }
+    [DROP](node) { const at = this[ITEMS].indexOf(realNode(node)); if (at >= 0) this[ITEMS].splice(at, 1); }
   }
 
   // Node (classes/node.md, visual-node.md): the accessors and methods listed there, nothing else.
@@ -143,7 +161,7 @@ export function createDocument({ width = 1920, height = 1080, background = false
       serial += 1;
       this.id = `${type}-${serial}`;
     }
-    get parent() { return this[PARENT]; }
+    get parent() { return handle(this[PARENT]); }
     get [SIZE]() { return { width: 0, height: 0 }; }
     get boundsLocal() { const size = this[SIZE]; return { x: 0, y: 0, width: size.width, height: size.height }; }
     get centerPointLocal() { const box = this.boundsLocal; return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }
@@ -157,7 +175,7 @@ export function createDocument({ width = 1920, height = 1080, background = false
     get allTextContent() { return []; }
     boundsInNode() { return this.boundsLocal; }
     localPointInNode(point) { return point; }
-    hasDescendant(node) { return this.allDescendants.includes(node); }
+    hasDescendant(node) { const id = node && node.id; return this.allDescendants.some((item) => item.id === id); }
     async createRendition() { return []; }
     setPositionInParent(parentPoint, localRegistrationPoint) {
       const point = parentPoint || { x: 0, y: 0 };
@@ -165,7 +183,7 @@ export function createDocument({ width = 1920, height = 1080, background = false
       this.translation = { x: Number(point.x) - Number(ref.x || 0), y: Number(point.y) - Number(ref.y || 0) };
     }
     setRotationInParent(angle) { this.rotation = Number(angle) || 0; }
-    removeFromParent() { const parent = this[PARENT]; if (parent && parent.children) parent.children.remove(this); }
+    removeFromParent() { const parent = realNode(this)[PARENT]; if (parent && parent.children) parent.children.remove(this); }
     cloneInPlace() { throw new Error("cloneInPlace() is not modelled by the document stand-in."); }
     [SCALE]() {}
     // resize (node.md, ResizeOptions): width and/or height with contain/cover, or proportional with one of them.
@@ -207,20 +225,56 @@ export function createDocument({ width = 1920, height = 1080, background = false
         hasUnavailableFonts() { return false; }
       };
       this.textAlignment = DOCUMENTED_CONSTANTS.TextAlignment.left;
-      this.layout = { type: DOCUMENTED_CONSTANTS.TextLayout.autoWidth };
+      this[LAYOUT] = { type: DOCUMENTED_CONSTANTS.TextLayout.autoWidth };
       this.visualEffects = [];
       this.nextTextNode = undefined;
     }
     get text() { return this[TEXT]; }
     set text(value) { this[TEXT] = String(value ?? ""); }
+    // layout (classes/standalone-text-node.md): AutoWidthTextLayout or AutoHeightTextLayout { type, width }.
+    // Area text is not supported by standalone text and throws.
+    get layout() { return Object.freeze({ ...this[LAYOUT] }); }
+    set layout(value) {
+      const type = value && value.type;
+      if (type === DOCUMENTED_CONSTANTS.TextLayout.autoWidth) { this[LAYOUT] = { type }; return; }
+      if (type === DOCUMENTED_CONSTANTS.TextLayout.autoHeight) {
+        const w = Number(value.width);
+        if (!(w > 0)) throw new Error("AutoHeightTextLayout needs a width in pixels.");
+        this[LAYOUT] = { type, width: w };
+        return;
+      }
+      throw new Error("Standalone text supports only TextLayout.autoWidth and TextLayout.autoHeight.");
+    }
     isStandaloneText() { return true; }
     isThreadedText() { return false; }
     get [SIZE]() {
+      const char = 0.55 * this[FONT];
+      const layout = this[LAYOUT];
+      if (layout.type === DOCUMENTED_CONSTANTS.TextLayout.autoHeight) {
+        const perLine = Math.max(1, Math.floor(layout.width / char));
+        let count = 0;
+        for (const paragraph of this[TEXT].split("\n")) {
+          let line = 0;
+          let lines = 1;
+          for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+            let length = word.length;
+            while (length > perLine) { if (line) lines += 1; line = 0; length -= perLine; lines += 1; }
+            if (!line) line = length;
+            else if (line + 1 + length <= perLine) line += 1 + length;
+            else { lines += 1; line = length; }
+          }
+          count += lines;
+        }
+        return { width: layout.width, height: 1.2 * this[FONT] * count };
+      }
       const lines = this[TEXT].split("\n");
       const longest = Math.max(1, ...lines.map((line) => line.length));
-      return { width: 0.55 * this[FONT] * longest, height: 1.2 * this[FONT] * lines.length };
+      return { width: char * longest, height: 1.2 * this[FONT] * lines.length };
     }
-    [SCALE](scale) { this[FONT] *= scale; }
+    [SCALE](scale) {
+      this[FONT] *= scale;
+      if (this[LAYOUT].type === DOCUMENTED_CONSTANTS.TextLayout.autoHeight) this[LAYOUT] = { ...this[LAYOUT], width: this[LAYOUT].width * scale };
+    }
   }
 
   class MediaContainerNode extends Node {
@@ -269,7 +323,7 @@ export function createDocument({ width = 1920, height = 1080, background = false
   pageNode.artboards.append(page);
   pageNode.parent = undefined;
   pageNode.removeFromParent = () => {};
-  pageNode.hasDescendant = (node) => page === node || page.hasDescendant(node);
+  pageNode.hasDescendant = (node) => page.id === node?.id || page.hasDescendant(node);
   if (background) {
     const back = new ShapeNode(TYPE.rectangle);
     back.width = width;
@@ -288,13 +342,13 @@ export function createDocument({ width = 1920, height = 1080, background = false
     page.children.append(node);
   }
 
-  const track = (node) => { log.created.push(node); return node; };
+  const track = (node) => { log.created.push(node); return handle(node); };
   const pages = { first: pageNode, last: pageNode, length: 1, item: (index) => (index === 0 ? pageNode : undefined), indexOf: (node) => (node === pageNode ? 0 : -1), [Symbol.iterator]: () => [pageNode][Symbol.iterator](), toArray: () => [pageNode] };
   const documentRoot = { type: "ExpressRoot", id: "root", pages, addOnData: {} };
   // Editor / ExpressEditor (classes/editor.md, express-editor.md). queueAsyncEdit was removed from
   // the SDK (references/changelog.md, 2026-08-03), so it is absent here too.
   const context = {
-    get insertionParent() { return page; },
+    get insertionParent() { return handle(page); },
     get currentPage() { return pageNode; },
     get selection() { return []; },
     get selectionIncludingNonEditable() { return []; },

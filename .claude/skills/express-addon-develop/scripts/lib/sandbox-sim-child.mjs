@@ -30,16 +30,17 @@ function imageBlob(spec) {
 function snapshot(doc, owned, bitmaps) {
   return doc.page.children.toArray().map((node) => {
     const box = node.boundsInParent;
-    const ours = owned.has(node);
+    const ours = owned.has(node.id);
     return {
       id: node.id,
       kind: kindOf(node),
       ours,
-      order: ours ? owned.get(node) : -1,
+      order: ours ? owned.get(node.id) : -1,
       background: node.id === "background",
+      locked: Boolean(node.locked),
       text: kindOf(node) === "text" ? node.text : undefined,
       fontSize: kindOf(node) === "text" ? fontSizeOf(node) : undefined,
-      bitmap: bitmaps.get(node),
+      bitmap: bitmaps.get(node.id),
       x: box.x, y: box.y, w: box.width, h: box.height
     };
   });
@@ -82,7 +83,7 @@ async function main() {
   }
   const results = [];
   for (const scenario of scenarios) {
-    const doc = createDocument({ width: scenario.width, height: scenario.height, background: scenario.background || false });
+    const doc = createDocument({ width: scenario.width, height: scenario.height, background: scenario.background || false, existing: scenario.existing || [] });
     const live = await loadEntry(entry, doc);
     const owned = new Map();
     const bitmaps = new Map();
@@ -93,7 +94,7 @@ async function main() {
       const value = raw.slice(2);
       const method = kind === "h" ? methods.heading : methods.image;
       if (!method) { steps.push({ kind, method: "", skipped: true, after: snapshot(doc, owned, bitmaps) }); continue; }
-      const before = new Set(doc.page.children.toArray());
+      const before = new Set(doc.page.children.toArray().map((node) => node.id));
       const createdBefore = doc.log.created.length;
       const arg = kind === "h" ? (methods.headingArg === "object" ? { text: value, heading: value, value } : value) : imageBlob(value);
       let returned = "";
@@ -104,13 +105,13 @@ async function main() {
       } catch (error) {
         threw = String(error?.message || error);
       }
-      const fresh = doc.page.children.toArray().filter((node) => !before.has(node) && kindOf(node) !== "other");
+      const fresh = doc.page.children.toArray().filter((node) => !before.has(node.id) && kindOf(node) !== "other");
       for (const node of fresh) {
         order += 1;
-        owned.set(node, order);
+        owned.set(node.id, order);
         if (kindOf(node) === "image") {
           const [w, h] = value.split("x").map(Number);
-          bitmaps.set(node, { width: w, height: h });
+          bitmaps.set(node.id, { width: w, height: h });
         }
       }
       const created = doc.log.created.length > createdBefore;

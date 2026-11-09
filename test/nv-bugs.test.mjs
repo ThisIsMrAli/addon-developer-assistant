@@ -140,12 +140,12 @@ test("NV1 the audit reads a shadow-DOM status and waits for a delayed error afte
 
 test("NV2 wrong placement maths is rejected by measuring the result on sample pages", () => {
   const wrong = {
-    "a third instead of the centre": mutate("return { centre: margin + width / 2 + column * (width + gutter), width };", "return { centre: margin + width / 3 + column * (width + gutter), width };"),
-    "everything at the origin": mutate("node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, anchor);", "node.setPositionInParent({ x: 0, y: 0 }, { x: 0, y: 0 });"),
+    "a third instead of the centre": mutate("return { centre: margin + width / 2 + index * (width + gutter), width };", "return { centre: margin + width / 3 + index * (width + gutter), width };"),
+    "everything at the origin": mutate("node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, node.centerPointLocal);", "node.setPositionInParent({ x: 0, y: 0 }, { x: 0, y: 0 });"),
     "no margin and no page check": mutate("return Math.round(Math.min(page.width, page.height) * 0.08);", "return -40;"),
-    "fixed coordinates": mutate("node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, anchor);", "node.setPositionInParent({ x: 400, y: 300 }, anchor);"),
-    "y always at the top": mutate("      y += size.height + gapFor(size.height);\n      break;", "      break;"),
-    "top-left anchor at the slot centre": mutate("node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, anchor);", "node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, { x: 0, y: 0 });"),
+    "fixed coordinates": mutate("node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, node.centerPointLocal);", "node.setPositionInParent({ x: 400, y: 300 }, node.centerPointLocal);"),
+    "existing content ignored": mutate("for (const box of blocked) if (rectsOverlap(rect, box)) { hit = box; break; }", ""),
+    "top-left anchor at the slot centre": mutate("node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, node.centerPointLocal);", "node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, { x: 0, y: 0 });"),
     "half of an unrelated width": mutate("const usable = page.width - margin * 2;\n  const gutter", "const usable = page.height - margin * 2;\n  const gutter")
   };
   for (const [name, code] of Object.entries(wrong)) {
@@ -157,9 +157,9 @@ test("NV2 wrong placement maths is rejected by measuring the result on sample pa
 
 test("NV2 equivalent maths with other names or argument order is accepted", () => {
   const renamed = TEXT_INSIDE_PAGE
-    .replace("function scaledSize(entry, maxWidth, maxHeight) {\n  const scale = Math.min(1, maxWidth / entry.width, maxHeight / entry.height);", "function scaledSize(entry, limitW, limitH) {\n  const scale = Math.min(limitH / entry.height, limitW / entry.width, 1);");
+    .replace("const scale = Math.min(1, usable / entry.width, tallest / entry.height);", "const scale = Math.min(tallest / entry.height, usable / entry.width, 1);");
   assert.notEqual(renamed, TEXT_INSIDE_PAGE);
-  const swapped = mutate("const cap = Math.min(72, Math.round(page.width / 16));", "const cap = Math.min(Math.round(page.width / 16), 72);");
+  const swapped = mutate("return Math.min(72, Math.round(page.width / 16));", "return Math.min(Math.round(page.width / 16), 72);");
   const destructured = mutate("  const margin = marginOf(page);\n  const usable = page.width - margin * 2;\n  const gutter", "  const margin = marginOf(page);\n  const { width: pageWidth } = page;\n  const usable = pageWidth - 2 * margin;\n  const gutter");
   for (const [name, code] of Object.entries({ renamed, swapped, destructured })) {
     const result = judge(code);
@@ -239,7 +239,7 @@ test("NV7 a full-page background does not make the page full", async () => {
   }
   const old = await loadSnippet(OLD_SANDBOX, { width: 1920, height: 1080, background: true });
   assert.match(String(old.api.addHeading("One")), /page is full/i, "the 1.0.4 snippet refused everything on a background");
-  const blind = mutate("  if (item.locked) return true;\n  const box = item.boundsInParent;\n  return box.width >= page.width * 0.95 && box.height >= page.height * 0.95;", "  return false;");
+  const blind = mutate("  return box.width >= page.width * 0.95 && box.height >= page.height * 0.95;", "  return false;");
   const result = judge(blind);
   assert.equal(result.ok, false);
   assert.match(result.problems.join(" "), /added nothing .*although the page has room/);
@@ -263,12 +263,13 @@ test("NV9 an afterAsyncCallback passed by name is the documented form", () => {
 import sdk from "add-on-sdk-document-sandbox";
 let used = 0;
 function fit(bitmap, page) {
-  const scale = Math.min(1, page.width / 4 / bitmap.width, page.height / 4 / bitmap.height);
+  const scale = Math.max(Math.min(1, page.width / 4 / bitmap.width, page.height / 4 / bitmap.height), 48 / Math.min(bitmap.width, bitmap.height));
   return { width: bitmap.width * scale, height: bitmap.height * scale };
 }
 export async function addImage(blob) {
   const page = editor.context.insertionParent;
   const bitmap = await editor.loadBitmapImage(blob);
+  if (Math.min(bitmap.width, bitmap.height) * 20 < Math.max(bitmap.width, bitmap.height)) return "This image is too thin to place.";
   ${declare}
   await editor.keepContentActiveDuringAsync(page, async () => {}, ${callback});
   return "";
@@ -387,7 +388,7 @@ test("NV14 many headings fill columns left to right, in the order they were adde
   for (const node of texts) assert.ok(fontSizeOf(node) >= 18);
   const boxes = texts.map(boxOf);
   for (const box of boxes) assert.ok(inside(box, 1920, 1080));
-  const middleFirst = mutate("return { centre: margin + width / 2 + column * (width + gutter), width };", "return { centre: margin + width / 2 + ((column + 1) % columns) * (width + gutter), width };");
+  const middleFirst = mutate("return { centre: margin + width / 2 + index * (width + gutter), width };", "return { centre: margin + width / 2 + ((index + 1) % columns) * (width + gutter), width };");
   const result = judge(middleFirst);
   assert.equal(result.ok, false);
   assert.match(result.problems.join(" "), /left to right/);
