@@ -480,7 +480,7 @@
     const controls = everything().filter((el) => isControl(el) && visible(el) && (!modal || contains(modal, el)));
     const signature = `${modalInfo ? modalInfo.selector : "page"}|${clean((modal || document.body).innerText).slice(0, 1500)}|${controls.length}`;
     // The words on the screen, most distinctive first. They help find the file the screen comes from.
-    const lines = String((modal || document.body).innerText || "").split("\n").map((line) => clean(line)).filter((line) => line.length >= 4 && line.length <= 70);
+    const lines = readableText().split(/\n|(?<=[.!?])\s+/).map((line) => clean(line)).filter((line) => line.length >= 4 && line.length <= 70);
     const texts = [...new Set(lines)].sort((a, b) => b.length - a.length).slice(0, 14);
     return { modal: modalInfo, findings, signature, texts, size: { w: innerWidth, h: innerHeight } };
   }

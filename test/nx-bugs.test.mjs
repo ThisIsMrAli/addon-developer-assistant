@@ -68,7 +68,7 @@ test("NX5 a top-level permissions key is rejected and the entry point key is acc
   const html = "<!doctype html><html><body><button>Connect</button></body></html>\n";
   const code = "try { await addOnUISdk.app.oauth.authorize(); await addOnUISdk.instance.clientStorage.setItem('token', token); } catch (error) {}\n";
   const base = {
-    name: "Sample", version: "1.0.0", manifestVersion: 2,
+    name: "Sample", testId: "11111111-1111-4111-8111-111111111111", version: "1.0.0", manifestVersion: 2,
     requirements: { apps: [{ name: "Express", apiVersion: 1 }] },
     entryPoints: [{ type: "panel", id: "panel1", main: "index.html" }]
   };
@@ -200,6 +200,9 @@ test("NX12 an existing CA is reused and sudo cannot touch the system store", () 
   fs.mkdirSync(path.dirname(cert), { recursive: true });
   fs.writeFileSync(cert, "existing");
   fs.writeFileSync(key, "existing");
+  const domain = path.join(home, ".config/Adobe/CCWebAddOn/devcert/domains/localhost/certificate.crt");
+  fs.mkdirSync(path.dirname(domain), { recursive: true });
+  fs.writeFileSync(domain, "existing-domain");
   const plan = prepareDevCa({ home, run() { throw new Error("openssl should not run"); } });
   assert.equal(plan.action, "reuse");
   assert.match(plan.warning, /system certificate/);

@@ -4,13 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readZip } from "../.claude/skills/express-addon-review/scripts/lib/package.mjs";
-import { project } from "./helpers.mjs";
+import { manifest, project } from "./helpers.mjs";
 import { blockFetch, developCli, run, sessionCli } from "./drive-develop.mjs";
 
 test("an existing add-on is not edited before the gate, then gains a caption and a zip", () => {
   const dir = project({
     "index.html": "<!doctype html><html><body><h1>Already here</h1></body></html>\n",
-    "package.json": { name: "already", private: true }
+    "package.json": { name: "already", private: true },
+    "manifest.json": { ...manifest, testId: "11111111-1111-4111-8111-111111111111" }
   });
   const htmlPath = path.join(dir, "index.html");
   const before = fs.readFileSync(htmlPath, "utf8");

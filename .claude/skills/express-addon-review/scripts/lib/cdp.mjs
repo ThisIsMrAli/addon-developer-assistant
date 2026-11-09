@@ -53,19 +53,36 @@ export async function launch({ width = 320, height = 800, scale = 2, chrome = fi
   };
   // However this process ends (an error, Ctrl-C, a timeout that stops the agent), its Chrome goes with it.
   process.once("exit", killChrome);
-  const cleanup = () => {
+  const removeProfile = () => {
+    try {
+      fs.rmSync(profile, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const cleanup = async () => {
     process.removeListener("exit", killChrome);
     killChrome();
-    setTimeout(() => fs.rmSync(profile, { recursive: true, force: true }), 400).unref();
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1500);
+      child.once("exit", () => { clearTimeout(timer); resolve(); });
+    });
+    const deadline = Date.now() + 5000;
+    while (Date.now() <= deadline) {
+      if (removeProfile() || !fs.existsSync(profile)) return;
+      await sleep(100);
+    }
   };
+  process.on("exit", removeProfile);
 
   try {
     const port = await debuggingPort(profile, child);
     const target = await pageTarget(port);
     const socket = await connect(target.webSocketDebuggerUrl);
-    return await makePage(socket, { width, height, scale }, cleanup);
+    return await makePage(socket, { width, height, scale, profile }, cleanup);
   } catch (error) {
-    cleanup();
+    await cleanup();
     throw error;
   }
 }
@@ -227,8 +244,9 @@ async function makePage(socket, size, cleanup) {
 
     async close() {
       socket.close();
-      cleanup();
-    }
+      await cleanup();
+    },
+    profile: size.profile || ""
   };
   return page;
 }

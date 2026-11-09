@@ -5,9 +5,12 @@
  * Run from the repository root: `node scripts/box-test.mjs`
  */
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pickEngine } from "../.claude/skills/express-addon-review/scripts/lib/fit.mjs";
+import { loadVendoredParser } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
 
 // `node --test` also loads this file, because the name ends in test.mjs. That copy must not start another run.
 if (process.env.NODE_TEST_CONTEXT) process.exit(0);
@@ -40,13 +43,33 @@ for (const [name, reason] of skips) {
   process.stdout.write(`skip: ${name} — ${reason}\n`);
 }
 
+try {
+  const parser = loadVendoredParser();
+  parser.parse("@customElement(\"add-on-root\") class Panel {}", {
+    sourceType: "module",
+    plugins: [["decorators", { decoratorsBeforeExport: true }], "typescript", "jsx"]
+  });
+} catch (error) {
+  process.stderr.write(`box-test failed before the suite: the vendored parser is missing or cannot parse.\n${error.message}\nThe skill must not continue by treating every file as a syntax error.\n`);
+  process.exit(1);
+}
+
 const env = { ...process.env, SKIP_E2E: "1" };
 if (optIn) delete env.SKIP_BROWSER_TESTS;
 else env.SKIP_BROWSER_TESTS = "1";
 
-const result = spawnSync(process.execPath, ["--test", "--test-skip-pattern", "box-test"], {
+const tempDir = process.env.TMPDIR || os.tmpdir();
+const ignored = new Set(["node-compile-cache"]);
+const before = new Set(fs.readdirSync(tempDir));
+const result = spawnSync(process.execPath, ["--import", "./test/tmp-guard.mjs", "--test", "--test-skip-pattern", "box-test"], {
   cwd: root,
   stdio: "inherit",
   env
 });
-process.exit(result.status ?? 1);
+const after = new Set(fs.readdirSync(tempDir));
+const left = [...after].filter((name) => !before.has(name) && !ignored.has(name));
+if (left.length) {
+  process.stderr.write(`box-test left ${left.length} entries in TMPDIR (${tempDir}):\n${left.map((name) => `  ${name}`).join("\n")}\n`);
+}
+const status = result.status ?? 1;
+process.exit(left.length ? 1 : status);

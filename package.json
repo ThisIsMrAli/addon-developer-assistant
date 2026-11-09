@@ -9,7 +9,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test --test-skip-pattern box-test",
+    "test": "node --import ./test/tmp-guard.mjs --test --test-skip-pattern box-test",
     "test:box": "node scripts/box-test.mjs",
     "develop": "node .claude/skills/express-addon-develop/scripts/develop.mjs",
     "scan": "node .claude/skills/express-addon-review/scripts/scan.mjs",

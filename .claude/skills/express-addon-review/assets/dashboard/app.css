@@ -120,6 +120,7 @@ svg.i { width: 1em; height: 1em; flex: none; }
 [hidden] { display: none !important; }
 
 /* ---- top bar ------------------------------------------------------------------------------ */
+html { scroll-padding-top: 96px; }
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
@@ -225,6 +226,7 @@ a.pill:hover, button.pill:hover { border-color: var(--line-strong); color: var(-
 }
 .step[data-status="done"] .mark-step { background: var(--ok); border-color: var(--ok); color: var(--bg); }
 .step[data-warn="true"] .mark-step { background: var(--warn); border-color: var(--warn); color: var(--bg); }
+.step[data-failed="true"] .mark-step { background: var(--bad); border-color: var(--bad); color: var(--bg); }
 .step[data-warn="true"] .name { color: var(--text); }
 .step[data-status="skipped"] .mark-step { border-style: dashed; }
 .step[data-status="running"] .mark-step { border-color: var(--primary-text); color: var(--primary-text); background: var(--primary-soft); }
@@ -310,7 +312,8 @@ a.pill:hover, button.pill:hover { border-color: var(--line-strong); color: var(-
 .btn.small { min-height: 30px; padding: 4px 11px; font-size: 12.5px; }
 
 /* ---- the user's turn ---------------------------------------------------------------------- */
-.turn { padding: 22px 24px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent); background: linear-gradient(180deg, var(--primary-soft), transparent 140px), var(--surface); box-shadow: 0 0 0 4px var(--primary-soft), var(--shadow); animation: rise 0.35s var(--ease); }
+.turn { scroll-margin-top: 96px; padding: 22px 24px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent); background: linear-gradient(180deg, var(--primary-soft), transparent 140px), var(--surface); box-shadow: 0 0 0 4px var(--primary-soft), var(--shadow); animation: rise 0.35s var(--ease); }
+.choice, fieldset.choices { scroll-margin-top: 96px; }
 .turn header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
 .turn h2 { font-size: 20px; letter-spacing: -0.015em; }

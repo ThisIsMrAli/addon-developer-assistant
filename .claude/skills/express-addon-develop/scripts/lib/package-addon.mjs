@@ -10,7 +10,7 @@ export function buildProject(dir) {
   if (!pkg?.scripts?.build) return { ok: true, skipped: true, note: "This add-on has no build script." };
   const install = run(dir, ["install", "--no-audit", "--no-fund"]);
   if (install.status !== 0) return { ok: false, error: tail(install) };
-  const build = run(dir, ["run", "build"]);
+  const build = run(dir, ["run", "build", ...analyticsArgs(pkg.scripts.build)]);
   const output = `${build.stdout || ""}\n${build.stderr || ""}`;
   if (build.status !== 0 || buildReportedError(build.status, output)) return { ok: false, error: tail(build) || "The build reported an error and exited 0." };
   return { ok: true, skipped: false, note: "npm run build finished." };
@@ -26,7 +26,7 @@ export function packageProject(dir) {
   const pkg = readPkg(dir);
   let scriptError = "";
   if (pkg?.scripts?.package) {
-    const result = run(dir, ["run", "package"]);
+    const result = run(dir, ["run", "package", ...analyticsArgs(pkg.scripts.package)]);
     if (result.status !== 0) scriptError = tail(result);
   }
   const found = findManifestZip(dir);
@@ -35,6 +35,15 @@ export function packageProject(dir) {
   const root = fs.existsSync(path.join(dir, "dist", "manifest.json")) ? path.join(dir, "dist") : addonSource(dir);
   writeZip(zip, listFiles(root, root));
   return { ok: true, zip, via: "packed-here", root, scriptError };
+}
+
+/**
+ * `@adobe/ccweb-add-on-analytics` BaseCommand flag `analytics` (`on` or `off`).
+ * Omitting it calls AnalyticsConsent.get(), which asks and then exits when stdin is not a terminal.
+ * `off` records consent as false and does not send analytics.
+ */
+function analyticsArgs(script) {
+  return /ccweb-add-on-scripts/.test(String(script || "")) ? ["--", "--analytics", "off"] : [];
 }
 
 function run(dir, args) {

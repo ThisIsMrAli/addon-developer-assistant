@@ -318,8 +318,9 @@ function paintRail() {
     const showDetail = step.detail && ["done", "running", "waiting", "skipped"].includes(step.status);
     const live = step.status === "running";
     const docsWarn = step.id === "docs" && (((session()?.docs?.counts?.stale || 0) + (session()?.docs?.counts?.failed || 0)) > 0);
-    return h("li", { class: "step", "data-status": step.status, "data-warn": docsWarn ? "true" : null, "aria-current": live ? "step" : null },
-      h("span", { class: "mark-step" }, docsWarn ? icon("alert", 2.4) : step.status === "done" ? icon("check", 3.4) : step.status === "skipped" ? icon("dash", 3) : step.status === "waiting" ? icon("hand", 2.2) : live ? h("span", { class: "spin" }) : null),
+    const failedDone = step.status === "done" && /failed|error/i.test(step.detail || "");
+    return h("li", { class: "step", "data-status": step.status, "data-warn": docsWarn ? "true" : null, "data-failed": failedDone ? "true" : null, "aria-current": live ? "step" : null },
+      h("span", { class: "mark-step" }, docsWarn || failedDone ? icon("alert", 2.4) : step.status === "done" ? icon("check", 3.4) : step.status === "skipped" ? icon("dash", 3) : step.status === "waiting" ? icon("hand", 2.2) : live ? h("span", { class: "spin" }) : null),
       h("div", null,
         h("div", { class: "name" }, step.label,
           step.status === "running" ? h("span", { class: "tag", "data-k": "running", text: "Now" }) : null,
@@ -495,7 +496,7 @@ function paintStats() {
   const walked = s?.develop?.auditScreens || panelShots.length;
   const tiles = s?.kind === "develop" ? [
     { tone: "work", icon: "doc", k: "Docs", v: counts ? String(counts.fresh + counts.stale + counts.failed) : "–", s: counts ? `${counts.fresh} fresh, ${counts.stale} stale, ${counts.failed} failed` : "Not fetched yet" },
-    { tone: s?.develop?.implemented ? "ok" : "work", icon: "layers", k: "Files written", v: Array.isArray(s?.develop?.files) ? String(s.develop.files.length) : (s?.develop?.implemented ? "Yes" : "No"), s: s?.develop?.implemented ? "Verified and recorded" : "Nothing is written before you approve" },
+    { tone: s?.develop?.implemented ? "ok" : "work", icon: "layers", k: "Files written", v: Array.isArray(s?.develop?.files) ? String(s.develop.files.length) : (s?.develop?.implemented ? "Yes" : "No"), s: s?.develop?.implemented ? "Verified and recorded" : (Array.isArray(s?.develop?.files) && s.develop.files.length ? "Written, not verified yet" : "Nothing is written before you approve") },
     { tone: "work", icon: "bug", k: "Panel walk", v: s?.develop?.audited ? String(walked || "–") : "–", s: panelShots.length ? `${panelShots.length} captures. SDK stand-in, not an Express pass.` : (s?.develop?.audited ? "Walked. SDK stand-in, not an Express pass." : "Not walked yet") },
     { tone: "work", icon: "layers", k: "Steps done", v: `${done}/${list.length}`, s: s?.startedAt ? "Running for " : "", since: s?.startedAt }
   ] : [
@@ -522,7 +523,11 @@ function paintSheet() {
   if (pending) fill(el.sheet, s.mode === "dashboard" ? turn(pending) : chatTurn(pending));
   else if (fresh) fill(el.sheet, settled(answered));
   else fill(el.sheet);
-  if (pending && s.mode === "dashboard") el.sheet.querySelector("input")?.focus({ preventScroll: true });
+  if (pending && s.mode === "dashboard") {
+    const target = el.sheet.querySelector(".choices") || el.sheet.querySelector(".turn");
+    target?.scrollIntoView({ block: "start" });
+    el.sheet.querySelector("input")?.focus({ preventScroll: true });
+  }
 }
 
 function turn(ask) {

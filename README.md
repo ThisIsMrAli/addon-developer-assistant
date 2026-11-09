@@ -48,13 +48,19 @@ node install-agents.mjs --global
 
 That links both skills into the agent folders on this machine, including Claude, Cursor, Codex, Gemini, and Windsurf. Use `node install-agents.mjs` without `--global` to link them only inside this project.
 
-`npx skills add` copies each skill directory on its own. Install both, into the same parent, or the develop skill cannot see Add-on Review:
+`npx skills add` copies each skill directory on its own. Install both, into the same parent, or the develop skill cannot see Add-on Review.
+
+The GitHub repository is private. The remote install fails with `Authentication failed` unless you are logged in as someone who can read it (`gh auth login`, or `GH_TOKEN` / `GITHUB_TOKEN` with access to the repo). It does not make the repository public.
 
 ```bash
+# From a checkout of this private repository. This does not need GitHub auth.
+npx skills add . --skill express-addon-review --skill express-addon-develop
+
+# The same command with the remote name, only after GitHub authentication.
 npx skills add ThisIsMrAli/addon-developer-assistant --skill express-addon-review --skill express-addon-develop
 ```
 
-The GitHub repository is private. `npx skills add` works only when you have access. It does not make the repository public. If you were sent the preview address instead, download the project from that page.
+`node install-agents.mjs --global` from this folder is the other path that does not talk to GitHub. If you were sent the preview address instead, download the project from that page and run one of the local commands above.
 
 ## Run a review
 

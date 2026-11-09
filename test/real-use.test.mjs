@@ -345,7 +345,7 @@ test("the printed next lines reach the handoff", { timeout: 300000 }, () => {
   assert.match(fs.readFileSync(htmlPath, "utf8"), /KEEP/);
   const record = JSON.parse(fs.readFileSync(path.join(out, "browser-run.json"), "utf8"));
   assert.equal(record.expressPass, false);
-  assert.equal(record.rendered, false);
+  assert.equal(record.rendered, process.env.SKIP_BROWSER_TESTS ? false : true);
   assert.notEqual(record.capturedOn, "cloud");
   const resumed = jsonOf(runAt(["scripts/develop.mjs", "begin", "--dir", dir, "--name", "caption-addon", "--brief", "Add a caption field to the panel", "--out", out], env));
   assert.equal(resumed.resumed, true);

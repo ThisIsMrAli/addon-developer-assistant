@@ -181,8 +181,12 @@ async function main() {
     log: `Walked ${result.states.length} screen${result.states.length === 1 ? "" : "s"}: ${errors.length ? `${errors.length} bug${errors.length === 1 ? "" : "s"} to fix` : "no bug found"}.`
   });
 
+  const visible = result.states.some((state) => (Array.isArray(state.texts) ? state.texts : []).some((item) => String(item || "").trim()));
+  const blank = errors.some((note) => note.rule === "panel-blank");
+  const crashed = errors.some((note) => note.rule === "script-error");
   const summary = {
-    ok: true,
+    ok: !blank && !crashed,
+    rendered: result.states.length > 0 && visible && !blank,
     pass: licensed ? "licensed" : "unlicensed",
     screens: result.states.length,
     themes: (args.themes || "light,dark").split(",").filter(Boolean),

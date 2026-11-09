@@ -9,7 +9,7 @@ import https from "node:https";
 import path from "node:path";
 import { DEV_ORIGIN, assertSafeArgv } from "./devcert.mjs";
 import { devRequestOptions, loopbackPolicyReason, probeDevPort, readLoopbackPolicy, resolvePolicyDirs } from "./loopback.mjs";
-import { prepareDevCa, SSL_WARNING, sudoGuard } from "./ssl-setup.mjs";
+import { prepareDevCa, releaseSudoGuard, SSL_WARNING, sudoGuard } from "./ssl-setup.mjs";
 
 export { DEV_ORIGIN };
 export const EXPRESS_URL = "https://new.express.adobe.com";
@@ -163,7 +163,7 @@ export function prepareExpressRun({ env = process.env, probe = {}, launch, exist
   const remote = remoteReason(env, probe);
   const hit = policy === undefined ? readLoopbackPolicy(resolvePolicyDirs(env, policyDirs)) : policy;
   const policyReason = hit?.blocks ? loopbackPolicyReason() : "";
-  const reason = [remote, policyReason].filter(Boolean).join(" ");
+  const reason = [remote, policyReason].filter(Boolean).join(". ");
   const adapter = detectAdapter(env, { exists, which });
   if (reason) {
     return {
@@ -286,27 +286,31 @@ export async function openDevServer({
     return { ok: false, trusted: false, outcome: "failed", error: prepared.error || "The local dev CA was not created.", warning: prepared.warning || SSL_WARNING };
   }
   const guard = sudoGuard();
-  const child = spawnImpl("npm", ["start", "--", "--analytics", "off"], {
-    cwd,
-    detached: true,
-    stdio: "ignore",
-    env: { ...process.env, CI: "1", PATH: `${guard}${path.delimiter}${process.env.PATH || ""}` }
-  });
-  if (child && typeof child.unref === "function") child.unref();
-  const started = Date.now();
-  while (!caReady()) {
-    if (Date.now() - started >= timeoutMs) {
-      return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: "npm start did not create the dev CA. The certificate was not checked before the server started." };
+  try {
+    const child = spawnImpl("npm", ["start", "--", "--analytics", "off"], {
+      cwd,
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, CI: "1", PATH: `${guard}${path.delimiter}${process.env.PATH || ""}` }
+    });
+    if (child && typeof child.unref === "function") child.unref();
+    const started = Date.now();
+    while (!caReady()) {
+      if (Date.now() - started >= timeoutMs) {
+        return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: "npm start did not create the dev CA. The certificate was not checked before the server started." };
+      }
+      await sleep(intervalMs);
     }
-    await sleep(intervalMs);
+    const setup = await trust();
+    if (setup && setup.ok === false) {
+      return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: setup.error || "The dev CA was not trusted.", setup, warning: prepared?.warning || SSL_WARNING };
+    }
+    const remaining = Math.max(0, timeoutMs - (Date.now() - started));
+    const checked = await waitForDevServer({ cwd, child, check, identify, sleep, timeoutMs: remaining, intervalMs });
+    return { ...checked, setup: { ...(setup && typeof setup === "object" ? setup : {}), ca: prepared?.action || "", warning: prepared?.warning || SSL_WARNING }, warning: prepared?.warning || SSL_WARNING };
+  } finally {
+    releaseSudoGuard(guard);
   }
-  const setup = await trust();
-  if (setup && setup.ok === false) {
-    return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: setup.error || "The dev CA was not trusted.", setup, warning: prepared?.warning || SSL_WARNING };
-  }
-  const remaining = Math.max(0, timeoutMs - (Date.now() - started));
-  const checked = await waitForDevServer({ cwd, child, check, identify, sleep, timeoutMs: remaining, intervalMs });
-  return { ...checked, setup: { ...(setup && typeof setup === "object" ? setup : {}), ca: prepared?.action || "", warning: prepared?.warning || SSL_WARNING }, warning: prepared?.warning || SSL_WARNING };
 }
 
 export async function waitForDevServer({ cwd, spawnImpl = spawn, child = null, check = checkTrusted, identify = async () => ({ ok: true }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutMs = 45000, intervalMs = 1000 } = {}) {
