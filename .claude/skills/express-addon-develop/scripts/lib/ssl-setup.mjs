@@ -4,7 +4,7 @@
  * This module never does that. It reuses a CA that is already in this home, and otherwise
  * creates one only under that home.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -121,11 +121,49 @@ export function sudoGuard() {
 
 const guards = new Set();
 
-/** Remove the refusing sudo directory once the dev server has started. */
+const held = new Set();
+
+/**
+ * Keep this guard until `pid` is gone, even if the CLI process exits first.
+ * The watcher waits before its first check so a just-started server is not treated as dead.
+ */
+export function bindGuardToPid(dir, pid) {
+  const id = Number(pid);
+  if (!dir || !Number.isInteger(id) || id <= 0) return;
+  held.add(dir);
+  const watch = path.join(dir, "watch.mjs");
+  const script = `import fs from "node:fs";
+const pid = ${id};
+const dir = ${JSON.stringify(dir)};
+setTimeout(() => {
+  const timer = setInterval(() => {
+    let alive = true;
+    try { process.kill(pid, 0); } catch { alive = false; }
+    if (alive) return;
+    clearInterval(timer);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
+  }, 200);
+}, 400);
+`;
+  fs.writeFileSync(watch, script);
+  const child = spawn(process.execPath, [watch], { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+/** Remove the refusing sudo directory once the dev server has exited. */
 export function releaseSudoGuard(dir) {
   if (!dir) return;
   guards.delete(dir);
+  held.delete(dir);
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+/** Drop guards that are not tied to a live server. A bound guard stays for that process. */
+export function releaseUnboundGuards() {
+  for (const dir of [...guards]) {
+    if (held.has(dir)) continue;
+    releaseSudoGuard(dir);
+  }
 }
 
 function seedDevcertFiles(home) {
@@ -167,9 +205,7 @@ function daysLeft(file) {
 }
 
 process.on("exit", () => {
-  for (const dir of guards) {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
-  }
+  releaseUnboundGuards();
 });
 
 function defaultRun(file, args) {
