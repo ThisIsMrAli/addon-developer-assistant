@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
+import { implementationHandoff, TEXT_INSIDE_PAGE, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
+import { pagesForBrief } from "../.claude/skills/express-addon-develop/scripts/lib/docs-live.mjs";
 
 function addon(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feature-accept-"));
@@ -29,7 +30,7 @@ test("styled text is accepted only when createText sets a style", () => {
   const real = addon({
     "manifest.json": manifest(),
     "index.html": "<!doctype html><html><body><h1>Styled text</h1></body></html>\n",
-    "code.js": "const node = editor.createText(title);\nnode.fontSize = 32;\nnode.fill = color;\n"
+    "code.js": TEXT_INSIDE_PAGE
   });
   const ok = verifyFeature({ dir: real, brief });
   assert.equal(ok.ok, true, ok.problems.join(" "));
@@ -42,6 +43,43 @@ test("styled text is accepted only when createText sets a style", () => {
   const rejected = verifyFeature({ dir: stub, brief });
   assert.equal(rejected.ok, false);
   assert.match(rejected.problems.join(" "), /stub|createText/);
+});
+
+test("NX13 inserted text without page bounds is rejected", () => {
+  const brief = "Add styled text to the document";
+  const loose = addon({
+    "manifest.json": manifest(),
+    "index.html": "<!doctype html><html><body><button>Add heading</button></body></html>\n",
+    "code.js": "const node = editor.createText(title);\nnode.fontSize = 120;\nnode.fill = color;\n"
+  });
+  const overflow = verifyFeature({ dir: loose, brief, build: false });
+  assert.equal(overflow.ok, false);
+  assert.match(overflow.problems.join(" "), /positioning or bounds/);
+  assert.match(overflow.problems.join(" "), /left edge/);
+
+  const commented = addon({
+    "manifest.json": manifest(),
+    "index.html": "<!doctype html><html><body><button>Add heading</button></body></html>\n",
+    "code.js": "// setPositionInParent boundsLocal centerPointLocal insertionParent width resize\nconst node = editor.createText(title);\nnode.fontSize = 120;\n"
+  });
+  const hidden = verifyFeature({ dir: commented, brief, build: false });
+  assert.equal(hidden.ok, false);
+  assert.match(hidden.problems.join(" "), /positioning or bounds/);
+
+  const handoff = implementationHandoff({ brief });
+  const textApi = handoff.apis.find((item) => item.api === "editor.createText()");
+  assert.match(textApi.snippet, /setPositionInParent/);
+  assert.match(textApi.snippet, /boundsLocal/);
+  assert.match(textApi.snippet, /centerPointLocal/);
+  assert.match(textApi.snippet, /insertionParent/);
+  assert.match(textApi.snippet, /ResizeBehavior\.contain/);
+  assert.match(textApi.note, /use-text\.md/);
+  assert.match(textApi.note, /position-elements\.md/);
+  assert.match(textApi.note, /resize-elements\.md/);
+  const pages = pagesForBrief(brief);
+  assert.ok(pages.includes("src/pages/guides/learn/how-to/use-text.md"));
+  assert.ok(pages.includes("src/pages/guides/learn/how-to/position-elements.md"));
+  assert.ok(pages.includes("src/pages/guides/learn/how-to/resize-elements.md"));
 });
 
 test("an image is accepted only when the code inserts one", () => {
@@ -88,9 +126,11 @@ test("a Spectrum panel form is accepted only with a Spectrum control", () => {
 test("a network or OAuth feature is accepted only with manifest permissions", () => {
   const brief = "Sign in with OAuth and store the token";
   const real = addon({
-    "manifest.json": manifest({ permissions: { oauth: ["www.dropbox.com"] } }),
+    "manifest.json": manifest({
+      entryPoints: [{ type: "panel", id: "panel1", main: "index.html", permissions: { oauth: ["www.dropbox.com"] } }]
+    }),
     "index.html": "<!doctype html><html><body><button id=\"connect\">Connect Dropbox</button></body></html>\n",
-    "index.js": "const token = await addOnUISdk.app.oauth.authorize();\n"
+    "index.js": "try {\n  const token = await addOnUISdk.app.oauth.authorize();\n  await addOnUISdk.instance.clientStorage.setItem(\"token\", token);\n} catch (error) {\n  console.error(error);\n}\n"
   });
   const ok = verifyFeature({ dir: real, brief });
   assert.equal(ok.ok, true, ok.problems.join(" "));

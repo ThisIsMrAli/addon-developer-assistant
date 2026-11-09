@@ -36,9 +36,9 @@ export function classifyFeature(feature, pages) {
     return result("unsupported", architecture, "fetch()", "src/pages/guides/learn/platform-concepts/architecture.md", "Network APIs are described as unavailable in the document sandbox.", pages);
   }
 
-  const wantsText = /\b(text|heading|headline|createText|styled)\b/i.test(text);
+  const wantsText = /\b(heading|headline|createText|styled)\b/i.test(text) || (/\btext\b/i.test(text) && /\b(document|sandbox)\b/i.test(text));
   const wantsImage = /\b(image|photo|picture|addImage)\b/i.test(text);
-  const wantsDocument = DOCUMENT.test(text) && (/\b(document|canvas|artboard|sandbox)\b/i.test(text) || wantsText || wantsImage);
+  const wantsDocument = /\bdocument sandbox\b/i.test(text) || /\binto the document\b/i.test(text) || (DOCUMENT.test(text) && (/\b(document|canvas|artboard|sandbox)\b/i.test(text) || wantsText || wantsImage));
   const wantsUi = UI.test(text);
 
   if (wantsDocument && (wantsText || wantsImage || /\b(rectangle|shape|artboard)\b/i.test(text))) {

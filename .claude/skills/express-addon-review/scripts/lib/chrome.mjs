@@ -42,6 +42,7 @@ export function shoot({ chrome, url, out, width, height, scale = 1, background =
   // profile Chrome 156 can sit on the first-run dialog and never exit, so that attempt
   // is killed with its process group and, if it wrote nothing, retried without a profile.
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "express-addon-review-chrome-"));
+  fs.writeFileSync(path.join(profile, "First Run"), "");
   fs.rmSync(out, { force: true });
   const shared = [
     "--headless=new",

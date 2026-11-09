@@ -4,10 +4,12 @@
  * This file does not type credentials and does not disable Chrome security flags.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import https from "node:https";
 import path from "node:path";
 import { DEV_ORIGIN, assertSafeArgv } from "./devcert.mjs";
+import { devRequestOptions, loopbackPolicyReason, probeDevPort, readLoopbackPolicy, resolvePolicyDirs } from "./loopback.mjs";
+import { prepareDevCa, SSL_WARNING, sudoGuard } from "./ssl-setup.mjs";
 
 export { DEV_ORIGIN };
 export const EXPRESS_URL = "https://new.express.adobe.com";
@@ -130,7 +132,16 @@ export function launchSpec(adapter, env = process.env) {
       ];
     return { adapter: adapter.id, spawn: false, url: EXPRESS_URL, headless: false, args: [], instructions, profile };
   }
-  const args = [`--user-data-dir=${profile}`, "--new-window", EXPRESS_URL];
+  const args = [
+    `--user-data-dir=${profile}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-fre",
+    "--noerrdialogs",
+    "--disable-search-engine-choice-screen",
+    "--new-window",
+    EXPRESS_URL
+  ];
   assertSafeArgv([adapter.file, ...args]);
   return {
     adapter: adapter.id,
@@ -148,13 +159,17 @@ export function launchSpec(adapter, env = process.env) {
   };
 }
 
-export function prepareExpressRun({ env = process.env, probe = {}, launch, exists, which } = {}) {
-  const reason = remoteReason(env, probe);
+export function prepareExpressRun({ env = process.env, probe = {}, launch, exists, which, policy, policyDirs } = {}) {
+  const remote = remoteReason(env, probe);
+  const hit = policy === undefined ? readLoopbackPolicy(resolvePolicyDirs(env, policyDirs)) : policy;
+  const policyReason = hit?.blocks ? loopbackPolicyReason() : "";
+  const reason = [remote, policyReason].filter(Boolean).join(" ");
   const adapter = detectAdapter(env, { exists, which });
   if (reason) {
     return {
       skipped: true,
       reason,
+      policyBlocked: Boolean(policyReason),
       launched: false,
       expressPass: false,
       expressHostRan: false,
@@ -169,6 +184,7 @@ export function prepareExpressRun({ env = process.env, probe = {}, launch, exist
   return {
     skipped: false,
     reason: "",
+    policyBlocked: false,
     launched: Boolean(spec.spawn && launch),
     expressPass: false,
     expressHostRan: false,
@@ -194,46 +210,48 @@ export function judgeExpress({ panelRendered = false, featureExercised = false, 
   };
 }
 
-export function checkTrusted(origin = DEV_ORIGIN) {
+export async function checkTrusted(origin = DEV_ORIGIN, probe = probeDevPort) {
   if (origin !== DEV_ORIGIN) {
-    return Promise.resolve({ ok: false, trusted: false, error: `Refusing ${origin}. The dev server is ${DEV_ORIGIN}.` });
+    return { ok: false, trusted: false, error: `Refusing ${origin}. The dev server is ${DEV_ORIGIN}.` };
   }
+  const found = await probe(5241);
+  if (!found.host) return { ok: false, trusted: false, error: found.report, listening: found.listening, refused: found.refused };
+  const result = await httpsOnLoopback(found.host, (response) => {
+    response.resume();
+    return { ok: true, trusted: true, statusCode: response.statusCode };
+  });
+  return { ...result, listening: found.listening, refused: found.refused, report: found.report, error: result.ok ? "" : `${found.report} ${result.error}` };
+}
+
+export async function identifyDevServer(origin, expectedName, probe = probeDevPort) {
+  if (origin !== DEV_ORIGIN) return { ok: false, error: `Refusing ${origin}. The dev server is ${DEV_ORIGIN}.` };
+  const name = String(expectedName || "").trim();
+  const found = await probe(5241);
+  if (!found.host) return { ok: false, error: found.report, listening: found.listening, refused: found.refused };
+  return httpsOnLoopback(found.host, (response) => new Promise((resolve) => {
+    const chunks = [];
+    response.on("data", (chunk) => chunks.push(chunk));
+    response.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      if (name && !body.includes(name)) {
+        resolve({ ok: false, error: `https://localhost:5241 is not this add-on. The listing does not contain “${name}”. ${found.report}` });
+        return;
+      }
+      resolve({ ok: true, name, listening: found.listening, refused: found.refused, report: found.report });
+    });
+  }));
+}
+
+function httpsOnLoopback(host, onResponse) {
   return new Promise((resolve) => {
-    const request = https.get(origin, { rejectUnauthorized: true, timeout: 8000 }, (response) => {
-      response.resume();
-      resolve({ ok: true, trusted: true, statusCode: response.statusCode });
+    const request = https.get(devRequestOptions(host), (response) => {
+      Promise.resolve(onResponse(response)).then(resolve, (error) => resolve({ ok: false, trusted: false, error: error.message }));
     });
     request.on("timeout", () => {
       request.destroy();
       resolve({ ok: false, trusted: false, error: "timeout" });
     });
-    request.on("error", (error) => {
-      resolve({ ok: false, trusted: false, error: error.code || error.message });
-    });
-  });
-}
-
-export function identifyDevServer(origin, expectedName) {
-  if (origin !== DEV_ORIGIN) return Promise.resolve({ ok: false, error: `Refusing ${origin}. The dev server is ${DEV_ORIGIN}.` });
-  const name = String(expectedName || "").trim();
-  return new Promise((resolve) => {
-    const request = https.get(origin, { rejectUnauthorized: true, timeout: 8000 }, (response) => {
-      const chunks = [];
-      response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
-        if (name && !body.includes(name)) {
-          resolve({ ok: false, error: `https://localhost:5241 is not this add-on. The listing does not contain “${name}”.` });
-          return;
-        }
-        resolve({ ok: true, name });
-      });
-    });
-    request.on("timeout", () => {
-      request.destroy();
-      resolve({ ok: false, error: "timeout" });
-    });
-    request.on("error", (error) => resolve({ ok: false, error: error.code || error.message }));
+    request.on("error", (error) => resolve({ ok: false, trusted: false, error: error.code || error.message }));
   });
 }
 
@@ -241,9 +259,19 @@ export function identifyDevServer(origin, expectedName) {
  * Start `npm start` first. The dev CA is created by that server.
  * Trust runs only after the CA file exists, then the certificate is checked, then the listing is checked.
  */
+export function seedChromeProfile(profile) {
+  if (!profile) return "";
+  mkdirSync(profile, { recursive: true });
+  const sentinel = path.join(profile, "First Run");
+  if (!existsSync(sentinel)) writeFileSync(sentinel, "");
+  return sentinel;
+}
+
 export async function openDevServer({
   cwd,
+  home = process.env.HOME,
   spawnImpl = spawn,
+  prepareCa = () => prepareDevCa({ home }),
   trust = async () => ({ ok: true }),
   caReady = () => true,
   check = checkTrusted,
@@ -253,7 +281,17 @@ export async function openDevServer({
   intervalMs = 1000
 } = {}) {
   if (!cwd) return { ok: false, outcome: "failed", error: "No add-on folder to serve.", trusted: false };
-  const child = spawnImpl("npm", ["start"], { cwd, detached: true, stdio: "ignore" });
+  const prepared = await prepareCa({ home, cwd });
+  if (prepared && prepared.ok === false) {
+    return { ok: false, trusted: false, outcome: "failed", error: prepared.error || "The local dev CA was not created.", warning: prepared.warning || SSL_WARNING };
+  }
+  const guard = sudoGuard();
+  const child = spawnImpl("npm", ["start", "--", "--analytics", "off"], {
+    cwd,
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, CI: "1", PATH: `${guard}${path.delimiter}${process.env.PATH || ""}` }
+  });
   if (child && typeof child.unref === "function") child.unref();
   const started = Date.now();
   while (!caReady()) {
@@ -264,16 +302,16 @@ export async function openDevServer({
   }
   const setup = await trust();
   if (setup && setup.ok === false) {
-    return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: setup.error || "The dev CA was not trusted.", setup };
+    return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: setup.error || "The dev CA was not trusted.", setup, warning: prepared?.warning || SSL_WARNING };
   }
   const remaining = Math.max(0, timeoutMs - (Date.now() - started));
   const checked = await waitForDevServer({ cwd, child, check, identify, sleep, timeoutMs: remaining, intervalMs });
-  return { ...checked, setup };
+  return { ...checked, setup: { ...(setup && typeof setup === "object" ? setup : {}), ca: prepared?.action || "", warning: prepared?.warning || SSL_WARNING }, warning: prepared?.warning || SSL_WARNING };
 }
 
 export async function waitForDevServer({ cwd, spawnImpl = spawn, child = null, check = checkTrusted, identify = async () => ({ ok: true }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutMs = 45000, intervalMs = 1000 } = {}) {
   if (!cwd) return { ok: false, outcome: "failed", error: "No add-on folder to serve.", trusted: false };
-  const startedChild = child || spawnImpl("npm", ["start"], { cwd, detached: true, stdio: "ignore" });
+  const startedChild = child || spawnImpl("npm", ["start", "--", "--analytics", "off"], { cwd, detached: true, stdio: "ignore" });
   if (!child && startedChild && typeof startedChild.unref === "function") startedChild.unref();
   const started = Date.now();
   let last = { ok: false, trusted: false, error: "not checked" };
@@ -297,15 +335,16 @@ export async function waitForDevServer({ cwd, spawnImpl = spawn, child = null, c
     trusted: false,
     pid: startedChild?.pid ?? null,
     outcome: last.error === "timeout" || !last.trusted ? "timeout" : "failed",
-    error: last.error || "https://localhost:5241 did not present a trusted certificate in time."
+    error: last.error || last.report || "https://localhost:5241 did not present a trusted certificate in time."
   };
 }
 
 export function spawnVisible(spec) {
   assertSafeArgv([spec.file, ...spec.args]);
-  if (spec.headless || spec.args.some((arg) => String(arg).includes("headless") || String(arg).includes("127.0.0.1"))) {
+  if (spec.headless || spec.args.some((arg) => String(arg).includes("headless") || String(arg).includes("127.0.0.1") || String(arg).includes("ignore-certificate"))) {
     throw new Error("Refusing a headless or non-localhost Express window.");
   }
+  seedChromeProfile(spec.profile);
   const child = spawn(spec.file, spec.args, { detached: true, stdio: "ignore" });
   child.unref();
   return { pid: child.pid };

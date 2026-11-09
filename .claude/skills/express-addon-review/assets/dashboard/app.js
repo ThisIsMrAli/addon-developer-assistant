@@ -317,8 +317,9 @@ function paintRail() {
     const took = step.status === "done" && step.startedAt && step.endedAt ? Date.parse(step.endedAt) - Date.parse(step.startedAt) : 0;
     const showDetail = step.detail && ["done", "running", "waiting", "skipped"].includes(step.status);
     const live = step.status === "running";
-    return h("li", { class: "step", "data-status": step.status, "aria-current": live ? "step" : null },
-      h("span", { class: "mark-step" }, step.status === "done" ? icon("check", 3.4) : step.status === "skipped" ? icon("dash", 3) : step.status === "waiting" ? icon("hand", 2.2) : live ? h("span", { class: "spin" }) : null),
+    const docsWarn = step.id === "docs" && (((session()?.docs?.counts?.stale || 0) + (session()?.docs?.counts?.failed || 0)) > 0);
+    return h("li", { class: "step", "data-status": step.status, "data-warn": docsWarn ? "true" : null, "aria-current": live ? "step" : null },
+      h("span", { class: "mark-step" }, docsWarn ? icon("alert", 2.4) : step.status === "done" ? icon("check", 3.4) : step.status === "skipped" ? icon("dash", 3) : step.status === "waiting" ? icon("hand", 2.2) : live ? h("span", { class: "spin" }) : null),
       h("div", null,
         h("div", { class: "name" }, step.label,
           step.status === "running" ? h("span", { class: "tag", "data-k": "running", text: "Now" }) : null,
@@ -395,11 +396,15 @@ function paintHero() {
   const waiting = steps().find((step) => step.status === "waiting");
   const next = steps().find((step) => step.status === "pending" && step.id !== "done");
   const feed = [...(s?.log || [])].slice(-4).reverse();
-  const cleanFinish = finished() && !/was skipped|did not pass|audit failed/i.test(s?.summary || "");
-  const tone = !s ? "idle" : finished() ? (cleanFinish ? "ok" : "idle") : pending ? "wait" : running ? "work" : "idle";
+  const summary = s?.summary || "";
+  const failedFinish = /audit failed|did not pass/i.test(summary);
+  const skippedFinish = /was skipped/i.test(summary);
+  const cleanFinish = finished() && !/was skipped|did not pass|audit failed/i.test(summary);
+  const blocked = !finished() && (s?.develop?.templatesFailed || s?.develop?.docsBlocked);
+  const tone = !s ? "idle" : finished() ? (cleanFinish ? "ok" : failedFinish ? "bad" : "idle") : blocked ? "bad" : pending ? "wait" : running ? "work" : "idle";
   const current = pending ? waiting : running || next;
   const index = current ? list.findIndex((step) => step.id === current.id) + 1 : 0;
-  const key = JSON.stringify([tone, current && [current.id, current.status, current.doing, current.detail, current.progress, current.startedAt], pending && pending.id, feed.map((entry) => entry.at + entry.text), s?.summary, agent && [agent.tone, agent.label.replace(/\(.*\)|, last update.*/, "")], d.bugsOpen.length, d.errors.length]);
+  const key = JSON.stringify([tone, current && [current.id, current.status, current.doing, current.detail, current.progress, current.startedAt], pending && pending.id, feed.map((entry) => entry.at + entry.text), s?.summary, s?.develop?.templatesFailed, s?.develop?.docsBlocked, s?.docs?.counts, agent && [agent.tone, agent.label.replace(/\(.*\)|, last update.*/, "")], d.bugsOpen.length, d.errors.length]);
   el.hero.dataset.tone = tone;
   region(el.hero, key, () => {
     if (!s) {
@@ -410,10 +415,19 @@ function paintHero() {
         h("div", { class: "meter" }, progressBar(null))
       ];
     }
-    if (finished()) {
+    if (blocked) {
+      const why = s.develop.templatesFailed || s.develop.docsBlocked;
       return [
-        h("div", { class: "hero-top" }, h("div", { class: "hero-step" }, icon("check", 3), h("p", { class: "eyebrow", text: "Finished" }))),
-        h("h2", { id: "hero-title", text: s.kind === "develop" ? "Build finished" : "Review finished" }),
+        h("div", { class: "hero-top" }, h("div", { class: "hero-step" }, icon("alert", 2.6), h("p", { class: "eyebrow", text: "Stopped" }))),
+        h("h2", { id: "hero-title", text: s.develop.templatesFailed ? "The template list could not be fetched" : "The Adobe docs could not be fetched" }),
+        h("p", { class: "summary", text: String(why) })
+      ];
+    }
+    if (finished()) {
+      const mark = failedFinish ? "alert" : skippedFinish ? "dash" : "check";
+      return [
+        h("div", { class: "hero-top" }, h("div", { class: "hero-step" }, icon(mark, 3), h("p", { class: "eyebrow", text: failedFinish ? "Needs another look" : "Finished" }))),
+        h("h2", { id: "hero-title", text: s.kind === "develop" ? (failedFinish ? "Build stopped on a failed check" : "Build finished") : "Review finished" }),
         h("p", { class: "summary", text: s.summary || "Everything you chose is done." }),
         d.total || d.bugsFixed.length ? h("p", { class: "lede" }, [d.total ? `${d.fixed.length} of ${d.total} findings fixed` : "", d.total && d.bugsFixed.length ? ", " : "", d.bugsFixed.length ? `${d.bugsFixed.length} panel ${plural(d.bugsFixed.length, "bug")} confirmed fixed` : ""].join("") + ".") : null
       ];

@@ -14,16 +14,16 @@
  *
  * `begin` does not use the network. Mode is asked before docs.
  */
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { reminder } from "../../express-addon-review/scripts/lib/next.mjs";
 import { addShot, appendAnswerLine, publishAsk, readMerged, setListing } from "../../express-addon-review/scripts/lib/session.mjs";
 import { originAsk } from "./lib/flow.mjs";
-import { fetchDevDocs } from "./lib/docs-live.mjs";
+import { fetchDevDocs, pagesForBrief } from "./lib/docs-live.mjs";
 import { classifyFeature, pagesFromDisk } from "./lib/feasibility.mjs";
 import { applyManifestName, gate, implementationHandoff, scaffoldProject, verifyFeature } from "./lib/implement.mjs";
-import { fillListingDir } from "./lib/listing-copy.mjs";
+import { fillListingDir, listingFrom } from "./lib/listing-copy.mjs";
 import { buildProject, packageProject } from "./lib/package-addon.mjs";
 import { homeDir, liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
 import { patchDevelop, saveDocs, saveFeasibility, saveTemplates, setStep, startDevelopSession } from "./lib/session-start.mjs";
@@ -49,11 +49,15 @@ try {
   process.exit(0);
 } catch (error) {
   let next = "Run `node scripts/session.mjs next` and do what it says. Do not end your turn.";
-  try {
-    const out = resolveOut();
-    next = reminder(out, { dashboardUp: dashboardUp(out) });
-  } catch {
-    // No session yet. The sentence above is still a next line.
+  if (/not an empty folder|Nothing was deleted/.test(error.message || "")) {
+    next = "Stopped. No session was created, and nothing was deleted. Do not run session.mjs next.";
+  } else {
+    try {
+      const out = resolveOut();
+      next = reminder(out, { dashboardUp: dashboardUp(out) });
+    } catch {
+      // No session yet. The sentence above is still a next line.
+    }
   }
   process.stdout.write(`${JSON.stringify({ ok: false, error: error.message, next })}\n`);
   process.exit(1);
@@ -82,9 +86,11 @@ function begin() {
     throw new Error(`${dir} is not an empty folder and has no add-on manifest. Nothing was deleted. Start from an empty folder, or point --dir at an existing add-on.`);
   }
   if (args.fresh) fs.rmSync(path.join(out, "answers.jsonl"), { force: true });
-  startDevelopSession(out, { name: args.name || path.basename(dir), dir, brief: args.brief || "" });
   const existing = Boolean(facts.manifest) && !args.empty;
-  patchDevelop(out, { empty: Boolean(args.empty) || facts.empty, folder: existing ? "existing" : "empty" });
+  const currentName = existing ? readManifestName(dir) : "";
+  const nameIgnored = existing && args.name && currentName && args.name !== currentName ? args.name : "";
+  startDevelopSession(out, { name: currentName || args.name || path.basename(dir), dir, brief: args.brief || "" });
+  patchDevelop(out, { empty: Boolean(args.empty) || facts.empty, folder: existing ? "existing" : "empty", ...(nameIgnored ? { nameIgnored } : {}) });
   if (existing) {
     const published = publishAsk(out, originAsk());
     appendAnswerLine(out, { type: "answer", askId: "origin", nonce: published.ask.nonce, value: "existing", via: "detected", at: new Date().toISOString() });
@@ -97,6 +103,7 @@ function begin() {
     network: false,
     empty: Boolean(args.empty) || facts.empty,
     existing,
+    ...(nameIgnored ? { nameIgnored, note: `--name ${nameIgnored} was not applied. The manifest already says ${currentName}.` } : {}),
     next: "Ask the mode question in questions.json with AskQuestion, then `node scripts/session.mjs mode --set dashboard` or `node scripts/session.mjs mode --set chat`. Do not fetch the docs before that. Do not end your turn."
   }, null);
 }
@@ -131,7 +138,8 @@ async function docs() {
     budgetMs: Number(args.budget) || 20000,
     pageMs: Number(args["page-timeout"]) || 8000,
     cacheDir: liveDir,
-    destDir: path.join(out, "docs")
+    destDir: path.join(out, "docs"),
+    pages: pagesForBrief(session.brief)
   });
   saveDocs(out, result);
   if (writeCache) {
@@ -151,6 +159,9 @@ async function docs() {
     fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   }
   const counts = result.counts;
+  if ((counts.failed || 0) > 0 && !(counts.fresh || 0) && !(counts.stale || 0)) {
+    patchDevelop(out, { docsBlocked: "Every Adobe doc page failed." });
+  }
   setStep(out, "docs", "done", `${counts.fresh} fresh, ${counts.stale} stale, ${counts.failed} failed`);
   print({ ok: true, ...result }, out);
 }
@@ -166,7 +177,14 @@ async function templates() {
   saveTemplates(out, stored);
   fs.writeFileSync(path.join(out, "templates.json"), `${JSON.stringify(result, null, 2)}\n`);
   if (!result.ok) {
-    print({ ok: false, error: result.note, ...stored }, out);
+    patchDevelop(out, { templatesFailed: result.note || "The template list could not be fetched." });
+    print({
+      ok: false,
+      error: result.note,
+      stopped: true,
+      next: "Stopped. The template names could not be fetched, so the build does not continue. Do not run templates again, and do not say the next step is picking a template.",
+      ...stored
+    }, out);
     process.exit(1);
   }
   print({ ok: true, ids: result.ids, source: result.source, npmVersion: result.npmVersion, note: result.note }, out);
@@ -198,9 +216,11 @@ function implement() {
       throw error;
     }
   }
-  applyManifestName(dir, session.addon?.name);
+  const existingAddon = session.develop?.folder === "existing";
+  if (!existingAddon) applyManifestName(dir, session.addon?.name);
+  else patchDevelop(out, { nameLeft: readManifestName(dir) });
   const pages = (session.docs?.pages || [])
-    .filter((page) => /architecture|document-api|implementation-guide/.test(page.id || ""))
+    .filter((page) => /architecture|document-api|implementation-guide|use-text|position-elements|resize-elements|use-images|oauth2|create-renditions/.test(page.id || ""))
     .map((page) => ({ id: page.id, label: page.label, url: page.url }));
   const handoff = implementationHandoff({ brief: session.brief, pages, design: decision.design });
   if (!session.develop?.implemented) patchDevelop(out, { handoff, implemented: false, addonPath: dir });
@@ -280,10 +300,9 @@ async function audit() {
   const served = await serveWithStandIn(source);
   let auditJson = {};
   try {
-    const ran = spawnSync(process.execPath, [path.join(reviewScripts, "audit.mjs"), "--out", staging, "--url", served.url], {
-      encoding: "utf8",
-      timeout: 240000,
-      env: { ...process.env, EXPRESS_REVIEW_NO_OPEN: "1" }
+    const ran = await runChild(path.join(reviewScripts, "audit.mjs"), ["--out", staging, "--url", served.url], {
+      env: { ...process.env, EXPRESS_REVIEW_NO_OPEN: "1" },
+      timeout: 240000
     });
     const line = (ran.stdout || "").split("\n").map((item) => item.trim()).filter((item) => item.startsWith("{")).at(-1) || "{}";
     try {
@@ -421,20 +440,8 @@ function listingText() {
   } catch {
     description = "";
   }
-  const boilerplate = /adobe creative cloud web add-on\.?$/i;
-  const usable = description && !boilerplate.test(description.trim()) ? description.trim() : "";
-  const brief = String(session.brief || "").trim();
   const name = manifest.name || session.addon.name;
-  const summary = brief || usable || name;
-  const words = summary.toLowerCase().match(/\b[a-z][a-z0-9-]{2,}\b/g) || [];
-  const skip = new Set(["the", "and", "for", "with", "add", "from", "that", "this", "into", "your"]);
-  const keywords = [...new Set(words.filter((word) => !skip.has(word)))].slice(0, 6);
-  const listing = {
-    name,
-    summary,
-    description: brief ? `${name}. ${brief}` : (usable || name),
-    keywords
-  };
+  const listing = listingFrom({ name, brief: session.brief, description, dir });
   setListing(out, listing);
   print({ ok: true, listing }, out);
 }
@@ -467,6 +474,42 @@ function dashboardUp(out) {
   } catch (error) {
     return error?.code === "EPERM";
   }
+}
+
+function readManifestName(dir) {
+  for (const rel of ["src/manifest.json", "manifest.json"]) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, rel), "utf8")).name || "";
+    } catch {
+      // The other path may hold the manifest.
+    }
+  }
+  return "";
+}
+
+function runChild(file, args, { env, timeout = 240000 } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [file, ...args], { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, timeout);
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ status: 1, stdout, stderr, error });
+    });
+  });
 }
 
 function slugFrom(name) {

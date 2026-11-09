@@ -50,10 +50,12 @@ test("an empty folder becomes a real template that builds, packages, and passes 
   assert.equal(browser.standIn, "express-sdk-stand-in");
   assert.match(browser.note, /not an Adobe Express pass/);
   assert.equal(browser.audit.bugs.length, 0);
+  assert.ok(browser.audit.screens > 0);
+  assert.equal((browser.audit.bugs || []).some((bug) => bug.kind === "panel-blank"), false);
   const zip = readZip(session.develop.zip);
   assert.ok(zip.entries.some((entry) => entry.name === "manifest.json"), zip.entries.map((entry) => entry.name).join(", "));
   const html = fs.readFileSync(path.join(dir, "src/index.html"), "utf8");
   assert.match(html, /caption-field/);
   assert.doesNotMatch(html, /develop-feature|function featureReady/);
-  console.log(`e2e template=${session.asks.find((item) => item.id === "template")?.answer} bugs=0 screens=${browser.audit.screens}`);
+  console.log(`e2e template=${session.asks.find((item) => item.id === "template")?.answer} bugs=${browser.audit.bugs.length} screens=${browser.audit.screens}`);
 });

@@ -224,6 +224,8 @@ a.pill:hover, button.pill:hover { border-color: var(--line-strong); color: var(-
   background: var(--surface); border: 2px solid var(--line-strong); color: var(--faint);
 }
 .step[data-status="done"] .mark-step { background: var(--ok); border-color: var(--ok); color: var(--bg); }
+.step[data-warn="true"] .mark-step { background: var(--warn); border-color: var(--warn); color: var(--bg); }
+.step[data-warn="true"] .name { color: var(--text); }
 .step[data-status="skipped"] .mark-step { border-style: dashed; }
 .step[data-status="running"] .mark-step { border-color: var(--primary-text); color: var(--primary-text); background: var(--primary-soft); }
 .step[data-status="running"] .mark-step .spin { width: 14px; height: 14px; border-width: 2px; }
@@ -257,12 +259,14 @@ a.pill:hover, button.pill:hover { border-color: var(--line-strong); color: var(-
 }
 .hero[data-tone="wait"] { border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
 .hero[data-tone="ok"] { border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.hero[data-tone="bad"] { border-color: color-mix(in srgb, var(--bad) 55%, transparent); }
 .hero[data-tone="idle"], .hero[data-tone="work"] { box-shadow: var(--shadow); }
 .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .hero-step { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .hero-step .eyebrow { color: var(--primary-text); }
 .hero[data-tone="wait"] .hero-step .eyebrow { color: var(--warn); }
 .hero[data-tone="ok"] .hero-step .eyebrow { color: var(--ok); }
+.hero[data-tone="bad"] .hero-step .eyebrow { color: var(--bad); }
 .timer { display: inline-flex; align-items: center; gap: 6px; font: 600 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .hero h2 { margin-top: 12px; font-size: 24px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; text-wrap: balance; }
 .hero .lede { margin-top: 6px; color: var(--muted); max-width: 70ch; text-wrap: pretty; }
@@ -276,7 +280,9 @@ a.pill:hover, button.pill:hover { border-color: var(--line-strong); color: var(-
 .feed li:first-child .bullet { background: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-soft); }
 .feed time { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--faint); }
 .hero .agent { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.summary { margin-top: 10px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--ok-soft); color: var(--text); }
+.summary { margin-top: 10px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); }
+.hero[data-tone="ok"] .summary { background: var(--ok-soft); }
+.hero[data-tone="bad"] .summary { background: var(--bad-soft); }
 
 /* ---- alerts ------------------------------------------------------------------------------- */
 .alert { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: start; padding: 14px 16px; border-radius: var(--radius); border: 1px solid; animation: rise 0.3s var(--ease); }

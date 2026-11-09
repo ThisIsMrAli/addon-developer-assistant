@@ -147,7 +147,9 @@ test("--empty is honored, and a non-empty folder is not wiped", () => {
   const refused = runAt(["scripts/develop.mjs", "begin", "--empty", "--dir", filled, "--name", "caption-addon", "--brief", "caption"], env);
   assert.notEqual(refused.status, 0);
   assert.match(jsonOf(refused).error, /nothing in the folder was deleted/);
-  assert.equal(jsonOf(refused).next.includes("session.mjs next"), true);
+  assert.match(jsonOf(refused).next, /No session was created/);
+  assert.match(jsonOf(refused).next, /Do not run session\.mjs next/);
+  assert.doesNotMatch(jsonOf(refused).next, /review\.mjs/);
   assert.equal(fs.readFileSync(path.join(filled, "keep.txt"), "utf8"), "keep");
 
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), "develop-empty-"));

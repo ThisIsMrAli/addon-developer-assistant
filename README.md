@@ -16,6 +16,12 @@ After the headless audit, the dashboard (or the chat, in chat mode) asks "Run a 
 
 A pass is recorded only when the panel rendered inside Express and the feature was exercised, with a screenshot. A failure or a timeout is recorded as that. A remote machine skips the step and says why. Chrome security flags stay as they are. The address is `localhost`, never `127.0.0.1`, and the browser is not started with `--ignore-certificate-errors`.
 
+Adobe's `ccweb-add-on-scripts` dev server listens on `[::1]:5241` only. The skill probes both `[::1]` and `127.0.0.1` and reports which one is listening. A browser or health check that resolves `localhost` to `127.0.0.1` gets connection refused while the server is up on `[::1]`. The address you open in Express stays `https://localhost:5241`.
+
+A managed Chrome policy `LoopbackNetworkBlockedForUrls` (often `["*"]`) blocks that loopback call. Site settings then say Apps on device are blocked by the administrator, and Express says the development environment failed to load and to check the PORT number. When that policy is present, the skip message and any failure message name `LoopbackNetworkBlockedForUrls`. The skill reads the JSON under `/etc/opt/chrome/policies` and `/etc/chromium/policies`. It does not change the policy and it does not add a Chrome security flag. A cloud agent, SSH session, or container still skips on its own.
+
+When localhost sideload is blocked, the real Express test is a private link, and only after you approve it. Run `npm run package`, then upload `dist.zip`. In Express open Manage add-ons, then the listing, then Private link. A publisher profile is required first, and the logo must be 250x250. This skill does not create the publisher profile or the listing. That step is manual.
+
 The adapter is detected, not assumed. Cursor's built-in browser is used when that agent exposes it. Otherwise the skill opens local Chrome or Edge. Claude Code's `claude --chrome` and Codex's computer-use API are documented in the skill and are not invoked from here; the fallback is local Chrome plus checklist buttons. Details and sources are in the develop skill's `references/express-beta.md`.
 
 ## Add-on Preflight
