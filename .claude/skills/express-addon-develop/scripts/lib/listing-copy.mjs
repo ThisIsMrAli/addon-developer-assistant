@@ -7,7 +7,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { addonCorpus } from "../../../express-addon-review/scripts/lib/listing.mjs";
-import { panelMarkup } from "./code-scan.mjs";
+import { panelMarkup, parseSource, scanHtml } from "./code-scan.mjs";
+import { exposedSandboxMethods } from "./standin.mjs";
 
 const BOILERPLATE = /^(get started|create rectangle|hello world|welcome|click me|javascript|swc-javascript|adobe creative cloud web add-on\.?)$/i;
 const PLACEHOLDER = /^(loading\b|please wait\b|placeholder\b)/i;
@@ -41,15 +42,11 @@ export function phrasesFromAddon(dir) {
         continue;
       }
       if (/\.html?$/i.test(entry.name)) {
-        const page = fs.readFileSync(full, "utf8")
-          .replace(/<script[\s\S]*?<\/script>/gi, " ")
-          .replace(/<style[\s\S]*?<\/style>/gi, " ")
-          .replace(/<!--[\s\S]*?-->/g, " ")
-          .replace(/<title[\s\S]*?<\/title>/gi, " ");
-        for (const piece of page.replace(/<[^>]+>/g, "\n").split("\n")) consider(htmlPhrases, piece);
+        for (const piece of scanHtml(fs.readFileSync(full, "utf8")).phrases || []) consider(htmlPhrases, piece);
       } else if (/\.(jsx?|tsx?|mjs)$/i.test(entry.name)) {
         const panel = panelMarkup(fs.readFileSync(full, "utf8"), entry.name);
-        for (const piece of panel.text.split(/(?<=[.!?])\s+/)) consider(htmlPhrases, piece);
+        const pieces = panel.phrases?.length ? panel.phrases : panel.text.split(/(?<=[.!?])\s+/);
+        for (const piece of pieces) consider(htmlPhrases, piece);
       } else if (/(^|\/)manifest\.json$/i.test(full.replaceAll("\\", "/"))) {
         let manifest = {};
         try { manifest = JSON.parse(fs.readFileSync(full, "utf8")); } catch { manifest = {}; }
@@ -100,12 +97,86 @@ function sourceFiles(dir) {
 const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1").replace(/<!--[\s\S]*?-->/g, " ");
 
 /**
+ * Sandbox facts come from the methods runtime.exposeApi actually publishes, and from the functions
+ * those methods call. A helper that is never exposed (the image half of a copied snippet, when the
+ * panel only publishes addHeading) is not a feature of the add-on. A file that never calls
+ * exposeApi is counted whole, because its exports are the API.
+ */
+function factSource(file) {
+  const text = String(file.text || "");
+  if (/\.json$/i.test(file.rel || "")) return "";
+  if (!/express-document-sdk|\bexposeApi\b|\beditor\./.test(text)) return text;
+  if (!/\bexposeApi\b/.test(text)) return text;
+  return reachableSandboxSource(text);
+}
+
+function clientStorageFact(code) {
+  const keys = [...code.matchAll(/setItem\(\s*["'`]([^"'`]+)["'`]/g)].map((match) => match[1]);
+  const storesNotes = keys.some((key) => /notes?/i.test(key)) || /setItem\([^)]{0,80}\bnotes?\b/i.test(code);
+  if (storesNotes) return "Keeps your notes between sessions";
+  if (/token|oauth|authorize|session/i.test(code)) return "Remembers your sign-in between sessions";
+  return "Remembers what you enter between sessions";
+}
+
+function reachableSandboxSource(text) {
+  const parsed = parseSource("sandbox.js", text);
+  if (!parsed.ast) return text;
+  const exposed = exposedSandboxMethods(text);
+  if (!exposed.length) return "";
+  const bodies = new Map();
+  const addBody = (name, node) => {
+    if (!name || !node || typeof node.start !== "number") return;
+    const list = bodies.get(name) || [];
+    list.push(node);
+    bodies.set(name, list);
+  };
+  const isFn = (node) => node && (node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression" || node.type === "FunctionDeclaration");
+  visitAst(parsed.ast, (node) => {
+    if (node.type === "FunctionDeclaration" && node.id?.name) addBody(node.id.name, node);
+    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFn(node.init)) addBody(node.id.name, node.init);
+    if ((node.type === "ClassMethod" || node.type === "ClassProperty") && !node.static && node.kind !== "constructor" && node.key?.type === "Identifier" && !node.computed && (node.type === "ClassMethod" || isFn(node.value))) addBody(node.key.name, node.type === "ClassMethod" ? node : node.value);
+    if (node.type === "AssignmentExpression" && node.left?.type === "MemberExpression" && !node.left.computed && isFn(node.right)) {
+      const key = node.left.property?.name;
+      if (key) addBody(key, node.right);
+    }
+  });
+  const seen = new Set();
+  const ranges = [];
+  const take = (name) => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    for (const node of bodies.get(name) || []) {
+      ranges.push([node.start, node.end]);
+      visitAst(node, (inner) => {
+        if (inner.type !== "CallExpression") return;
+        const callee = inner.callee;
+        if (callee?.type === "Identifier") take(callee.name);
+        if (callee?.type === "MemberExpression" && !callee.computed && callee.property?.type === "Identifier") take(callee.property.name);
+      });
+    }
+  };
+  for (const name of exposed) take(name);
+  if (!ranges.length) return "";
+  ranges.sort((a, b) => a[0] - b[0]);
+  return ranges.map(([start, end]) => text.slice(start, end)).join("\n");
+}
+
+function visitAst(node, fn) {
+  if (!node || typeof node !== "object" || typeof node.type !== "string") return;
+  fn(node);
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) value.forEach((item) => visitAst(item, fn));
+    else if (value && typeof value === "object" && typeof value.type === "string") visitAst(value, fn);
+  }
+}
+
+/**
  * What the add-on does, read from its code, as short sentences for the listing. Each fact is
  * there only because the matching API call (or manifest permission) is in the add-on.
  */
 export function featureFacts(dir) {
   const files = sourceFiles(dir);
-  const code = files.filter((file) => !/\.json$/i.test(file.rel)).map((file) => stripComments(file.text)).join("\n");
+  const code = files.filter((file) => !/\.json$/i.test(file.rel)).map((file) => stripComments(factSource(file))).join("\n");
   let manifest = {};
   const manifestFile = files.find((file) => /(^|\/)manifest\.json$/i.test(file.rel.replaceAll("\\", "/")));
   try { manifest = manifestFile ? JSON.parse(manifestFile.text) : {}; } catch { manifest = {}; }
@@ -141,7 +212,7 @@ export function featureFacts(dir) {
     if (provider) nouns.push(provider.toLowerCase());
     if (/list_folder|listFiles|files\.list|\/files\b|\.entries\b/i.test(code)) facts.push(provider ? `Lists your ${provider} files` : "Lists your files");
   }
-  if (/clientStorage/.test(code)) facts.push(/\bnotes?\b/.test(ui) ? "Keeps your notes between sessions" : "Remembers what you enter between sessions");
+  if (/clientStorage/.test(code)) facts.push(clientStorageFact(code));
   if (/\bnotes?\b/.test(ui) && !nouns.includes("notes")) nouns.push("notes");
   return { facts: [...new Set(facts)], nouns };
 }

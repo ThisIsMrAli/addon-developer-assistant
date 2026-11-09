@@ -43,6 +43,7 @@ Run it again after every fix. It matches bugs across runs: one that is gone is m
 | `low-contrast` | Text is under 4.5:1 against its background. The note names the theme. | Asked in `fix` |
 | `click-without-keyboard` | Something clickable is not a button, a link, or focusable. | Asked in `fix` |
 | `script-error` | The page threw an uncaught error while it was walked. | Asked in `fix` |
+| `status-error` | A press showed a failed status. That text is the panel reporting the failure. It is not a script that failed to load. | Asked in `fix` |
 | `request-failed` | A file from the add-on itself failed to load. | Asked in `fix` |
 
 **Fix now** means: fix it without asking, run the audit again, and repeat until none is open. These are measurements, not opinions, and no user wants them left. A bug that cannot be fixed without changing the design goes in the closing summary with the reason.

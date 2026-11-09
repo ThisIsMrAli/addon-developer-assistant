@@ -1,5 +1,5 @@
 /**
- * Regression tests for the rerun6 findings (NP1-NP11).
+ * Regression tests for the rerun6 findings (NP1-NP12).
  * NP11: heading-image 1.0.5 failed in real Express with "not a function", because the snippet called
  * slots.at(-1) and Express's document sandbox (QuickJS) has no Array.prototype.at. The fixtures are
  * the 1.0.5 sandbox source and the built, minified code.js from /workspace/express-private/heading-image-1.0.5.zip.
@@ -10,11 +10,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
+import { claimLate, consoleFindings, PRESS_WATCH_MS, themeApplySource } from "../.claude/skills/express-addon-review/scripts/lib/audit.mjs";
+import { featureFacts, phrasesFromAddon } from "../.claude/skills/express-addon-develop/scripts/lib/listing-copy.mjs";
+import { exposedSandboxMethods, panelSandboxCalls, sandboxApiMismatches } from "../.claude/skills/express-addon-develop/scripts/lib/standin.mjs";
+import { setAddonVersion } from "../.claude/skills/express-addon-develop/scripts/lib/version.mjs";
 import { createDocument, DOCUMENTED_CONSTANTS, fontSizeOf } from "../.claude/skills/express-addon-develop/scripts/lib/document-stand-in.mjs";
 import { TEXT_INSIDE_PAGE } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
 import { placementProblems, simulateSandbox } from "../.claude/skills/express-addon-develop/scripts/lib/sandbox-sim.mjs";
-import { sandboxEngineProblems } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
-import { MISSING_PROTOTYPE_METHODS, MISSING_STATIC_METHODS, stripNewerBuiltins } from "../.claude/skills/express-addon-develop/scripts/lib/sandbox-engine.mjs";
+import { environmentSniffProblems, sandboxEngineProblems } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
+import { CLOCK_ADVANCE_MS, HIDDEN_RUNTIME_GLOBALS, MISSING_PROTOTYPE_METHODS, MISSING_STATIC_METHODS, stripNewerBuiltins } from "../.claude/skills/express-addon-develop/scripts/lib/sandbox-engine.mjs";
 import { loadEntry } from "../.claude/skills/express-addon-develop/scripts/lib/sandbox-loader.mjs";
 import { standInSource } from "../.claude/skills/express-addon-develop/scripts/lib/standin.mjs";
 
@@ -89,11 +94,12 @@ test("NP11 code-scan flags every newer built-in, and leaves older ones and an ow
     "structuredClone({});",
     "setTimeout(() => {}, 5);",
     "'abc'.at(-1);",
+    "'abc'.replaceAll('a', 'b');",
     "list?.at?.(-1);"
   ];
   for (const text of bad) assert.equal(sandboxEngineProblems([{ rel: "code.js", text }]).length, 1, text);
   const fine = [
-    "const a = [1, 2]; a.find((x) => x); a.flat(); a.flatMap((x) => [x]); 'a'.replaceAll('a', 'b'); const b = a ?? []; new Set(a);",
+    "const a = [1, 2]; a.find((x) => x); a.flat(); a.flatMap((x) => [x]); const b = a ?? []; new Set(a);",
     "const list = { at(i) { return i; } }; list.at(1);",
     "const setTimeout = (fn) => fn(); setTimeout(() => {});"
   ];
@@ -108,7 +114,8 @@ test("NP11 stripNewerBuiltins removes the documented list from a realm and leave
   assert.ok(removed.includes("Array.prototype.at"));
   assert.ok(removed.includes("Object.hasOwn"));
   assert.equal(vm.runInContext("typeof [].at", context), "undefined");
-  assert.equal(vm.runInContext("typeof [].find + typeof [].flat + typeof ''.replaceAll", context), "functionfunctionfunction");
+  assert.equal(vm.runInContext("typeof [].find + typeof [].flat", context), "functionfunction");
+  assert.equal(vm.runInContext("typeof ''.replaceAll", context), "undefined");
   assert.equal(typeof [].at, "function", "the test process keeps its own built-ins");
   assert.ok(MISSING_PROTOTYPE_METHODS.length >= 10 && MISSING_STATIC_METHODS.length >= 4);
 });
@@ -219,3 +226,197 @@ test("NP5 tiny images are placed at 48 px or more, and too-thin ones are refused
   assert.equal(await run.api.addImage({ width: 40, height: 30 }), "");
   for (const box of run.images().map(boxOf)) assert.ok(Math.min(box.width, box.height) >= 47.5, JSON.stringify(box));
 });
+
+const FOOL = `import addOnSandboxSdk from "add-on-sdk-document-sandbox";
+import { editor, constants } from "express-document-sdk";
+const t0 = Date.now();
+const SIZES = new Set(["1920x1080", "1080x1920", "1080x1080", "320x200", "1200x800", "3840x2160"]);
+const WORDS = /^(One|Two|Three|Four|Alpha|Beta title|Gamma|Heading|Sample heading|A heading of about)/;
+function place(text) {
+  const page = editor.context.insertionParent;
+  const node = editor.createText(text);
+  page.children.append(node);
+  node.fullContent.applyCharacterStyles({ fontSize: 32, color: { red: 0, green: 0, blue: 0, alpha: 1 } }, { start: 0, length: node.fullContent.text.length });
+  const key = page.width + "x" + page.height;
+  const honest = typeof process !== "undefined" && (Date.now() - t0) < 5000 && SIZES.has(key) && WORDS.test(text);
+  if (honest) node.setPositionInParent({ x: page.width / 2, y: 80 }, node.centerPointLocal);
+  else node.setPositionInParent({ x: 0, y: 0 }, { x: 0, y: 0 });
+  return "";
+}
+function addHeading(heading) { return place(String(heading ?? "")); }
+async function addImage() { return place("Image"); }
+addOnSandboxSdk.instance.runtime.exposeApi({ addHeading, addImage });
+`;
+
+test("NP1 record is not fooled by the old page sizes, the first five seconds, Node, or the sample strings", () => {
+  const sniff = environmentSniffProblems([{ rel: "code.js", text: FOOL }]);
+  assert.ok(sniff.some((line) => /process|Date\.now|1920x1080/.test(line)), sniff.join("\n"));
+  const { problems, sim } = simulate(FOOL);
+  assert.equal(sim.ok, true, sim.error);
+  assert.ok(sim.engine.hidden.includes("process"));
+  assert.ok(sim.engine.clockAdvanceMs >= 5000);
+  assert.ok(problems.some((line) => /lands at|outside the page/.test(line)), problems.slice(0, 6).join("\n"));
+  const honest = withFile("code.js", TEXT_INSIDE_PAGE, (entry, dir) => {
+    const runs = [];
+    for (const seed of [1, 7, 99]) {
+      const one = simulateSandbox({ dir, entry, seed });
+      runs.push(one);
+      assert.equal(one.ok, true, one.error);
+      assert.deepEqual(placementProblems(one), [], `seed ${seed}`);
+    }
+    return runs;
+  });
+  const varied = honest.flatMap((one) => (one.scenarios || []).filter((step) => !step.pinned));
+  const sizes = new Set(varied.map((step) => `${step.width}x${step.height}`));
+  for (const banned of ["1920x1080", "1080x1920", "1080x1080", "320x200", "1200x800", "3840x2160"]) {
+    assert.equal(sizes.has(banned), false, banned);
+  }
+  assert.ok(sizes.size > 1);
+});
+
+test("NP1 the published snippet does not sniff the page, the clock, or Node", () => {
+  assert.deepEqual(environmentSniffProblems([{ rel: "code.js", text: TEXT_INSIDE_PAGE }]), []);
+  assert.equal(CLOCK_ADVANCE_MS >= 5000, true);
+  assert.ok(HIDDEN_RUNTIME_GLOBALS.includes("process"));
+  assert.ok(HIDDEN_RUNTIME_GLOBALS.includes("Buffer"));
+});
+
+function addon(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "np-addon-"));
+  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+  return dir;
+}
+
+test("NP4 listing copy uses the panel's own phrases, and only the sandbox API the panel can call", () => {
+  const sandbox = TEXT_INSIDE_PAGE.replace(
+    "if (typeof runtime !== \"undefined\") runtime.exposeApi({ addHeading, addImage });",
+    "if (typeof runtime !== \"undefined\") runtime.exposeApi({ addHeading });"
+  );
+  const dir = addon({
+    "manifest.json": JSON.stringify({ name: "Heading Only", version: "1.0.0", manifestVersion: 2 }),
+    "code.js": sandbox,
+    "index.js": `import { html, LitElement } from "lit";
+class Panel extends LitElement {
+  render() {
+    return html\`<h2>Add a heading</h2><sp-textfield label="Heading text" placeholder="Type the heading"></sp-textfield><sp-button>Insert text</sp-button><p>Places the heading on the current page.</p>\`;
+  }
+}
+`
+  });
+  const phrases = phrasesFromAddon(dir);
+  assert.ok(phrases.includes("Insert text"), phrases.join(" | "));
+  assert.ok(phrases.includes("Heading text"), phrases.join(" | "));
+  assert.ok(phrases.some((line) => line.includes("Places the heading on the current page")), phrases.join(" | "));
+  const facts = featureFacts(dir).facts.join(" ");
+  assert.match(facts, /heading|text/i);
+  assert.doesNotMatch(facts, /image/i);
+  const tokens = addon({
+    "manifest.json": JSON.stringify({ name: "Dropbox Notes", version: "1.0.0", manifestVersion: 2 }),
+    "index.js": `import { clientStorage, oauth } from "express-addon-sdk";
+async function signIn() { const token = await oauth.authorize(); await clientStorage.setItem("token", token); }
+`,
+    "index.html": `<sp-button>Save note</sp-button>`
+  });
+  const stored = featureFacts(tokens).facts.join(" ");
+  assert.match(stored, /sign-in/);
+  assert.doesNotMatch(stored, /Keeps your notes/);
+});
+
+test("NP6 a late error stays with the press that caused it, and a status error is not a script error", () => {
+  assert.ok(PRESS_WATCH_MS >= 5000);
+  const actions = [{ label: "Add image", ok: true, error: "" }];
+  claimLate(actions, ["uncaught exception: too late"]);
+  assert.equal(actions[0].ok, false);
+  assert.equal(actions[0].kind, "script");
+  assert.match(actions[0].error, /too late/);
+  const seen = { exceptions: ["net down"], console: [], failed: [] };
+  const pressed = [{ label: "Save", ok: false, kind: "status", error: "Please sign in first" }];
+  const notes = consoleFindings(seen, pressed, "http://127.0.0.1:5245/");
+  const script = notes.find((note) => /script error/i.test(note.text));
+  const status = notes.find((note) => /failed status/i.test(note.text));
+  assert.ok(script);
+  assert.ok(status);
+  assert.doesNotMatch(script.text, /sign in/);
+  assert.match(status.text, /sign in/);
+  assert.match(script.text, /net down/);
+});
+
+test("NP7 exposeApi(new DocApi()) and .call are real method calls", () => {
+  const code = TEXT_INSIDE_PAGE
+    .replace("export function addHeading", "function addHeading")
+    .replace("export async function addImage", "async function addImage")
+    .replace(
+      "if (typeof runtime !== \"undefined\") runtime.exposeApi({ addHeading, addImage });",
+      "class DocApi { addHeading(heading) { return addHeading(heading); } async addImage(blob) { return addImage(blob); } }\nif (typeof runtime !== \"undefined\") runtime.exposeApi(new DocApi());"
+    );
+  assert.deepEqual(exposedSandboxMethods(code).sort(), ["addHeading", "addImage"]);
+  const proto = `class DocApi {}\nDocApi.prototype.addHeading = function () {};\nDocApi.prototype.addImage = async function () {};\nruntime.exposeApi(new DocApi());`;
+  assert.deepEqual(exposedSandboxMethods(proto).sort(), ["addHeading", "addImage"]);
+  const panel = `const proxy = runtime.apiProxy(); proxy.addImage.call(proxy, blob);`;
+  assert.deepEqual(panelSandboxCalls(panel), ["addImage"]);
+  assert.deepEqual(sandboxApiMismatches([{ rel: "ui.js", text: panel }], { exposed: ["addImage"] }), []);
+  const { problems } = simulate(code);
+  assert.deepEqual(problems, []);
+});
+
+test("NP8 versions reject leading zeros, both flags, and warn on a downgrade", () => {
+  const dir = addon({ "manifest.json": JSON.stringify({ name: "Demo", version: "2.0.0", manifestVersion: 2 }) });
+  assert.throws(() => setAddonVersion(dir, { set: "01.0.5" }), /leading zeros|not a three-part/);
+  assert.throws(() => setAddonVersion(dir, { set: "1.0.6", bump: "minor" }), /not both/);
+  const down = setAddonVersion(dir, { set: "0.9.0" });
+  assert.equal(down.version, "0.9.0");
+  assert.match(down.warning, /downgrade/i);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")).version, "0.9.0");
+});
+
+test("NP9 the README does not call the deleted branch the form that works today", () => {
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+  assert.match(readme, /This is the form that works today/);
+  assert.match(readme, /npx skills add ThisIsMrAli\/addon-developer-assistant --skill express-addon-review --skill express-addon-develop/);
+  assert.match(readme, /remote branch was not found/);
+  assert.doesNotMatch(readme, /the form that works today: main has no skills/);
+});
+
+test("NP10 the dark capture sets sp-theme to dark", () => {
+  const audit = fs.readFileSync(path.join(root, ".claude/skills/express-addon-review/scripts/lib/audit.mjs"), "utf8");
+  assert.match(audit, /themeApplySource\(theme\)/);
+  const theme = { color: "light", setAttribute(name, value) { this[name] = value; } };
+  const document = {
+    documentElement: { style: {}, setAttribute(name, value) { this[name] = value; } },
+    querySelectorAll(selector) {
+      if (selector === "sp-theme, sp-theme-provider") return [theme];
+      return [];
+    }
+  };
+  vm.runInNewContext(themeApplySource("dark"), { document });
+  assert.equal(theme.color, "dark");
+  assert.equal(document.documentElement.style.colorScheme, "dark");
+  assert.equal(document.documentElement["data-theme"], "dark");
+});
+
+test("sandbox built-ins guard: code-scan and the sample run fail on .at(", () => {
+  const code = `import addOnSandboxSdk from "add-on-sdk-document-sandbox";
+import { editor } from "express-document-sdk";
+function addHeading(heading) {
+  const slots = [String(heading ?? "")];
+  const node = editor.createText(slots.at(-1));
+  editor.context.insertionParent.children.append(node);
+  node.setPositionInParent({ x: 400, y: 80 }, node.centerPointLocal);
+  return "";
+}
+addOnSandboxSdk.instance.runtime.exposeApi({ addHeading });
+`;
+  assert.match(sandboxEngineProblems([{ rel: "code.js", text: code }]).join("\n"), /\.at\(/);
+  const { problems, sim } = simulate(code);
+  assert.ok(sim.engine.removed.includes("Array.prototype.at"));
+  assert.ok(sim.engine.removed.includes("String.prototype.replaceAll"));
+  assert.ok(sim.engine.removed.includes("Array.prototype.toSorted"));
+  assert.ok(sim.engine.removed.includes("Array.prototype.toReversed"));
+  assert.ok(sim.engine.removed.includes("Array.prototype.with"));
+  assert.ok(sim.engine.removed.includes("Object.hasOwn"));
+  assert.ok(sim.engine.removed.includes("Object.groupBy"));
+  assert.ok(sim.engine.removed.includes("Array.prototype.findLast"));
+  assert.ok(sim.engine.hidden.includes("structuredClone"));
+  assert.ok(problems.some((line) => /at is not a function|\.at\(/.test(line)), problems.slice(0, 4).join("\n"));
+});
+

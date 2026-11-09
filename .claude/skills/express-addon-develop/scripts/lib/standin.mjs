@@ -27,8 +27,11 @@ export function exposedSandboxMethods(source) {
   if (!parsed.ast) return [];
   const inits = new Map();
   const assigned = new Map();
+  const classes = new Map();
+  const protoMethods = new Map();
   const exposedArgs = [];
   visit(parsed.ast, (node) => {
+    if ((node.type === "ClassDeclaration" || node.type === "ClassExpression") && node.id?.name) classes.set(node.id.name, node);
     if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && node.init) {
       const list = inits.get(node.id.name) || [];
       list.push(node.init);
@@ -46,6 +49,14 @@ export function exposedSandboxMethods(source) {
           const list = assigned.get(node.left.object.name) || [];
           list.push(key);
           assigned.set(node.left.object.name, list);
+        }
+      }
+      if (node.left?.type === "MemberExpression" && node.left.object?.type === "MemberExpression" && !node.left.object.computed && node.left.object.property?.name === "prototype" && node.left.object.object?.type === "Identifier") {
+        const key = node.left.computed ? (node.left.property?.type === "StringLiteral" ? node.left.property.value : "") : node.left.property?.name;
+        if (key) {
+          const list = protoMethods.get(node.left.object.object.name) || [];
+          list.push(key);
+          protoMethods.set(node.left.object.object.name, list);
         }
       }
     }
@@ -73,6 +84,15 @@ export function exposedSandboxMethods(source) {
       }
       return;
     }
+    if (node.type === "NewExpression") {
+      const ctor = node.callee?.type === "ParenthesizedExpression" ? node.callee.expression : node.callee;
+      if (ctor?.type === "ClassExpression") addClassBody(ctor);
+      if (ctor?.type === "Identifier") {
+        if (classes.has(ctor.name)) addClassBody(classes.get(ctor.name));
+        for (const key of protoMethods.get(ctor.name) || []) add(key);
+      }
+      return;
+    }
     if (node.type === "CallExpression") {
       const callee = node.callee;
       const isAssign = callee?.type === "MemberExpression" && callee.object?.name === "Object" && callee.property?.name === "assign";
@@ -84,6 +104,12 @@ export function exposedSandboxMethods(source) {
   };
   function add(key) {
     if (typeof key === "string" && /^[A-Za-z_$]/.test(key)) found.add(key);
+  }
+  function addClassBody(cls) {
+    for (const item of cls.body?.body || []) {
+      if (item.static || item.kind === "constructor") continue;
+      if ((item.type === "ClassMethod" || item.type === "ClassProperty" || item.type === "ClassPrivateMethod") && !item.computed && (item.key?.type === "Identifier" || item.key?.type === "StringLiteral")) add(item.key.name || item.key.value);
+    }
   }
   for (const arg of exposedArgs) addObject(arg);
   return [...found];
@@ -179,7 +205,12 @@ export function panelSandboxCalls(source) {
   visit(parsed.ast, (node) => {
     if (node.type !== "CallExpression") return;
     const callee = node.callee;
-    if (callee?.type === "MemberExpression" && !callee.computed && callee.property?.type === "Identifier" && isProxy(callee.object)) found.push(callee.property.name);
+    if (callee?.type === "MemberExpression" && !callee.computed && callee.property?.type === "Identifier") {
+      const prop = callee.property.name;
+      if ((prop === "call" || prop === "apply" || prop === "bind") && callee.object?.type === "MemberExpression" && !callee.object.computed && callee.object.property?.type === "Identifier" && isProxy(callee.object.object)) found.push(callee.object.property.name);
+      else if ((prop === "call" || prop === "apply" || prop === "bind") && callee.object?.type === "Identifier" && methods.has(callee.object.name)) found.push(methods.get(callee.object.name));
+      else if (isProxy(callee.object)) found.push(prop);
+    }
     if (callee?.type === "Identifier" && methods.has(callee.name)) found.push(methods.get(callee.name));
   });
   return found;
@@ -217,8 +248,14 @@ export function standInSource(methods = [], { sandbox = "", engine = [] } = {}) 
             const api = doc && doc.log.exposed;
             if (api && typeof api === "object") {
               const proxy = {};
-              for (const name of Object.keys(api)) {
-                if (typeof api[name] !== "function") continue;
+              const names = [];
+              for (let obj = api; obj && obj !== Object.prototype; obj = Object.getPrototypeOf(obj)) {
+                for (const name of Object.getOwnPropertyNames(obj)) {
+                  if (name === "constructor" || names.indexOf(name) !== -1) continue;
+                  if (typeof obj[name] === "function") names.push(name);
+                }
+              }
+              for (const name of names) {
                 proxy[name] = async (...args) => {
                   const seen = doc.log.violations.length;
                   // Express's document sandbox lacks these built-ins, so this code can throw "not a function" there (NP11).

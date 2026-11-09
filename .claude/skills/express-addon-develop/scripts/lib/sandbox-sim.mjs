@@ -5,8 +5,17 @@
  *
  * The code runs in a child Node process with a time limit, against document-stand-in.mjs.
  * Nothing here is Adobe Express. A pass is "the maths holds on these pages", not an Express pass.
+ *
+ * NP1: a placement that is correct only on the old sample sizes (1920x1080, 1080x1920, 1080x1080,
+ * 320x200, 1200x800, 4K), only for the old sample strings, only for a few seconds after load, or
+ * only when `process` exists, used to pass. Each run varies the page size and the heading text
+ * (one pinned page keeps "Alpha / Beta title / Gamma" so the even-gap check stays reproducible).
+ * The child moves Date and performance.now forward by 6 seconds after the module loads, waits a
+ * short real delay, and hides process and the other Node globals while the add-on code runs.
+ * What this still cannot catch is documented on varyScenarios.
  */
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,16 +32,92 @@ export const SCENARIOS = [
   { name: "unlocked full-bleed background", width: 1080, height: 1080, background: "unlocked", steps: ["h:One", "h:Two", "h:Three"], expectAll: true, aligned: true },
   { name: "thirty headings", width: 1920, height: 1080, steps: Array.from({ length: 30 }, (_, i) => `h:Heading ${i + 1}`), expectFirst: 6, order: true },
   { name: "small page fills up", width: 320, height: 200, steps: Array.from({ length: 12 }, (_, i) => `h:Heading number ${i + 1}`), expectFirst: 1, order: true },
-  { name: "landscape even gaps", width: 1920, height: 1080, steps: ["h:Alpha", "h:Beta title", "h:Gamma", "i:640x400"], expectAll: true, aligned: true, evenGaps: true, stable: true },
+  { name: "landscape even gaps", width: 1920, height: 1080, steps: ["h:Alpha", "h:Beta title", "h:Gamma", "i:640x400"], expectAll: true, aligned: true, evenGaps: true, stable: true, pinned: true },
   { name: "locked logo and footer", width: 1920, height: 1080, existing: [{ x: 860, y: 60, width: 200, height: 120, locked: true, id: "logo" }, { x: 0, y: 980, width: 1920, height: 100, locked: true, id: "footer" }], steps: ["h:One", "h:Two", "h:Three"], expectAll: true },
   { name: "long heading on an empty square page", width: 1080, height: 1080, steps: ["h:A heading of about seventy-five characters that must wrap on a square page"], expectAll: true },
   { name: "tiny and thin images", width: 1080, height: 1080, steps: ["i:2x2", "i:1x1000", "i:3000x10", "i:40x30"], expectFirst: 1 }
 ];
 
+const BANNED_PAGES = new Set(["1200x800", "3840x2160", "1920x1080", "1080x1920", "1080x1080", "320x200"]);
+const WORDS = ["Cedar", "Maple", "Quartz", "Plover", "Nimbus", "Harbor", "Linen", "Cobalt", "Fennel", "Iris", "Juniper", "Kelp", "Mesa", "Orchid", "Pebble", "Spruce", "Willow"];
+
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function phrase(rand, minLength) {
+  let text = "";
+  while (text.length < minLength) {
+    text = `${text} ${WORDS[Math.floor(rand() * WORDS.length)]}${Math.floor(rand() * 90)}`.trim();
+  }
+  return text;
+}
+
+/**
+ * A new size and new heading text for one run.
+ *
+ * Still open: the sizes stay inside a range the snippet can actually lay out (about 260–2800 px),
+ * so a cheat of the form "if the page is under 200 px or over 4000 px, place at the origin" is not
+ * hit. The clock jumps 6 seconds rather than waiting 6 seconds of wall time, so a check that reads
+ * a clock other than Date and performance.now (for example a timestamp from a native binding) is
+ * not moved. globalThis itself stays, and an obfuscated lookup such as globalThis["pro"+"cess"]
+ * is not what the hide removes. code-scan flags the direct form of these checks; it does not flag
+ * a check that is built from strings at runtime. The same file gets a different seed every run
+ * unless the caller passes one, and the seed is on the result so a failure can be repeated.
+ */
+export function varyScenarios(base, rand) {
+  return base.map((scenario) => {
+    if (scenario.pinned) return { ...scenario, delayMs: scenario.delayMs ?? 40 };
+    const limits = sizeLimits(scenario);
+    let width = clamp(Math.round(scenario.width * (limits.lo + rand() * (limits.hi - limits.lo))), limits.minW, limits.maxW);
+    let height = clamp(Math.round(scenario.height * (limits.lo + rand() * (limits.hi - limits.lo))), limits.minH, limits.maxH);
+    let guard = 0;
+    while (BANNED_PAGES.has(`${width}x${height}`) && guard < 6) {
+      width += 17;
+      height += 11;
+      guard += 1;
+    }
+    const sx = width / scenario.width;
+    const sy = height / scenario.height;
+    const existing = (scenario.existing || []).map((item) => ({
+      ...item,
+      x: Math.round(item.x * sx),
+      y: Math.round(item.y * sy),
+      width: Math.max(1, Math.round(item.width * sx)),
+      height: Math.max(1, Math.round(item.height * sy))
+    }));
+    const steps = scenario.steps.map((step) => {
+      if (!step.startsWith("h:")) return step;
+      const value = step.slice(2);
+      return `h:${phrase(rand, Math.max(4, value.length))}`;
+    });
+    return { ...scenario, width, height, existing, steps, delayMs: 40 };
+  });
+}
+
+function sizeLimits(scenario) {
+  if (scenario.width <= 400 && scenario.height <= 300) return { minW: 260, maxW: 400, minH: 160, maxH: 240, lo: 0.9, hi: 1.1 };
+  if ((scenario.steps || []).length >= 20) return { minW: 1500, maxW: 2600, minH: 860, maxH: 1500, lo: 0.9, hi: 1.2 };
+  return { minW: 720, maxW: 2600, minH: 720, maxH: 2600, lo: 0.78, hi: 1.28 };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
 /** Runs the scenarios. `entry` is the sandbox file that calls runtime.exposeApi. */
-export function simulateSandbox({ dir, entry, scenarios = SCENARIOS, timeoutMs = 30000 }) {
+export function simulateSandbox({ dir, entry, scenarios, timeoutMs = 45000, vary = true, seed } = {}) {
+  const chosen = seed ?? crypto.randomInt(1, 2 ** 31);
+  const run = scenarios || (vary ? varyScenarios(SCENARIOS, mulberry32(chosen)) : SCENARIOS);
   const result = spawnSync(process.execPath, [CHILD], {
-    input: JSON.stringify({ dir, entry, scenarios }),
+    input: JSON.stringify({ dir, entry, scenarios: run }),
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 20 * 1024 * 1024,
@@ -42,7 +127,9 @@ export function simulateSandbox({ dir, entry, scenarios = SCENARIOS, timeoutMs =
   const line = String(result.stdout || "").trim().split("\n").filter((item) => item.startsWith("{")).at(-1);
   if (!line) return { ok: false, error: (String(result.stderr || "").trim().split("\n").slice(-4).join(" ") || "The sandbox simulation printed nothing.").slice(0, 600) };
   try {
-    return JSON.parse(line);
+    const parsed = JSON.parse(line);
+    parsed.seed = chosen;
+    return parsed;
   } catch {
     return { ok: false, error: "The sandbox simulation printed something that is not JSON." };
   }
@@ -83,7 +170,7 @@ export function placementProblems(sim, { text = true, image = true } = {}) {
     problems.push(`Inserted content has no checked positioning or bounds: the sandbox code could not be run on sample pages (${sim?.error || "unknown error"}). Expose the add functions with runtime.exposeApi, read the page size from editor.context.insertionParent, and place each node inside the page and clear of existing content (boundsLocal, boundsInParent, setPositionInParent). The default 100pt text sits on the top-left origin and runs off the left edge.`);
     return problems;
   }
-  if (text && !sim.methods?.heading) problems.push(`No method in runtime.exposeApi (${(sim.exposed || []).join(", ") || "none"}) created text when the panel passed it a heading string.`);
+  if (text && !sim.methods?.heading) problems.push(`No method in runtime.exposeApi (${(sim.exposed || []).join(", ") || "none"}) created text when the panel passed it a heading string.${sim.headingProbeError ? ` It threw: ${sim.headingProbeError}` : ""}`);
   if (image && !sim.methods?.image) problems.push(`No method in runtime.exposeApi (${(sim.exposed || []).join(", ") || "none"}) created an image container when the panel passed it an image Blob.${sim.imageProbeError ? ` It threw: ${sim.imageProbeError}` : ""}`);
   const add = (message) => { if (!problems.includes(message)) problems.push(message); };
   for (const scenario of sim.scenarios || []) {

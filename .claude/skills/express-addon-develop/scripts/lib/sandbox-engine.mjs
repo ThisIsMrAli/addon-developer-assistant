@@ -10,8 +10,13 @@
  * "not a function", so Array.prototype.at is missing. QuickJS added `.at` in its 2023-12-09 release,
  * together with Object.hasOwn and findLast/findLastIndex, so an engine without `.at` predates that
  * release and lacks everything QuickJS added in it or later (Changelog 2023-12-09, 2024-01-13,
- * 2025-04-26, 2025-09-13). Older built-ins that 1.0.4 used in real Express (`??`, spread, Set, find)
- * and ones QuickJS shipped earlier (replaceAll 2020-01-05, flat/flatMap, Promise.any 2020-04-12) stay.
+ * 2025-04-26, 2025-09-13). Older built-ins that 1.0.4 used in real Express (`??`, spread, Set, find,
+ * flat, flatMap) stay.
+ *
+ * `String.prototype.replaceAll` shipped in QuickJS on 2020-01-05, but the Express document sandbox
+ * is not a full JavaScript environment and it has not been shown to exist there. The sample-page
+ * run deletes it, and code-scan flags it, so a Node run cannot hide a missing replaceAll the way
+ * a Node run hid `.at` (NP11).
  *
  * This file has no imports, so the browser stand-in can load it as it is.
  */
@@ -36,7 +41,8 @@ export const MISSING_PROTOTYPE_METHODS = [
   ["TypedArray", "toReversed", "2024-01-13"],
   ["TypedArray", "with", "2024-01-13"],
   ["String", "isWellFormed", "2024-01-13"],
-  ["String", "toWellFormed", "2024-01-13"]
+  ["String", "toWellFormed", "2024-01-13"],
+  ["String", "replaceAll", "2020-01-05"]
 ];
 
 /** Static functions: [owner, name, release]. */
@@ -70,6 +76,7 @@ const PROTO_NAMES = new Set(MISSING_PROTOTYPE_METHODS.map(([, name]) => name));
 /** A short sentence on why `owner.name` fails in Express. */
 export function missingReason(owner, name) {
   const proto = MISSING_PROTOTYPE_METHODS.find(([o, n]) => n === name && (!owner || o === owner));
+  if (proto && proto[2] < "2023-12-09") return `${proto[0]}.prototype.${name} may be missing in the Express document sandbox. The sandbox is not a full JavaScript environment (QuickJS added ${name} in its ${proto[2]} release, which is earlier than the .at release, and Express has not been shown to provide it). record deletes it before the sample run, so the call throws here if Express lacks it.`;
   if (proto) return `${proto[0]}.prototype.${name} is not in the Express document sandbox's JavaScript engine (QuickJS added it in its ${proto[2]} release; real Express threw "not a function" on Array.prototype.at, so its engine predates the 2023-12-09 release). In Express the call throws.`;
   const stat = MISSING_STATIC_METHODS.find(([o, n]) => o === owner && n === name);
   if (stat) return `${owner}.${name} is not in the Express document sandbox's JavaScript engine (QuickJS added it in its ${stat[2]} release; the Express engine predates 2023-12-09, as Array.prototype.at is missing there). In Express the call throws "not a function".`;
@@ -82,6 +89,7 @@ export function missingReason(owner, name) {
 export function replacementFor(name) {
   return {
     at: "use list[list.length - 1] (or list[i]) instead of .at()",
+    replaceAll: "use split(search).join(replacement), or a loop",
     findLast: "loop from the end, or use a reversed copy with slice().reverse().find()",
     findLastIndex: "loop from the end",
     toSorted: "use slice().sort()",
@@ -95,6 +103,85 @@ export function replacementFor(name) {
     fetch: "fetch in the iframe panel and pass the result to the sandbox"
   }[name] || "";
 }
+
+/**
+ * Node globals and document-sandbox globals the sample-page run hides while add-on code runs.
+ * `process` is how NP1's fool knew it was in Node. `structuredClone` and the timers are not part
+ * of the document sandbox. They are set to undefined for the call and restored afterwards, because
+ * the child process itself still has to write its result.
+ */
+export const HIDDEN_RUNTIME_GLOBALS = [
+  "process", "Buffer", "global", "setImmediate", "clearImmediate", "queueMicrotask",
+  ...MISSING_GLOBAL_NAMES
+];
+
+export function hideRuntimeGlobals(target = globalThis) {
+  const saved = [];
+  for (const name of HIDDEN_RUNTIME_GLOBALS) {
+    if (!Object.prototype.hasOwnProperty.call(target, name) && !(name in target)) continue;
+    const desc = Object.getOwnPropertyDescriptor(target, name);
+    saved.push([name, desc]);
+    try {
+      Object.defineProperty(target, name, { configurable: true, writable: true, value: undefined });
+    } catch {
+      try { target[name] = undefined; } catch { /* a non-configurable global stays */ }
+    }
+  }
+  return saved;
+}
+
+export function restoreRuntimeGlobals(target, saved) {
+  for (const [name, desc] of saved || []) {
+    try {
+      if (desc) Object.defineProperty(target, name, desc);
+      else delete target[name];
+    } catch {
+      // The call has finished. A global that cannot be restored is left as the hide set it.
+    }
+  }
+}
+
+/** Names of functions on an object and its prototype chain, skipping the constructor. Express calls these. */
+export function callableNames(object) {
+  const names = [];
+  const seen = new Set();
+  for (let current = object; current && current !== Object.prototype; current = Object.getPrototypeOf(current)) {
+    for (const name of Object.getOwnPropertyNames(current)) {
+      if (name === "constructor" || seen.has(name)) continue;
+      let value;
+      try { value = current[name]; } catch { continue; }
+      if (typeof value === "function") { seen.add(name); names.push(name); }
+    }
+  }
+  return names;
+}
+
+/**
+ * Move `Date` and `performance.now` forward. The add-on captures `Date.now` at load, then record
+ * advances the offset, so a check of the form "correct only for 5 seconds after load" fails.
+ * A real multi-second sleep on every sample page would make record too slow to run. The clock
+ * move is the check. A short real delay is added by the sample-page child as well.
+ */
+export function installShiftedClock(target = globalThis) {
+  const RealDate = target.Date;
+  const realNow = RealDate.now.bind(RealDate);
+  const realPerf = target.performance?.now?.bind(target.performance);
+  let offset = 0;
+  function ShiftedDate(...args) {
+    if (new.target) return args.length === 0 ? new RealDate(realNow() + offset) : new RealDate(...args);
+    return RealDate();
+  }
+  ShiftedDate.now = () => realNow() + offset;
+  ShiftedDate.parse = RealDate.parse.bind(RealDate);
+  ShiftedDate.UTC = RealDate.UTC.bind(RealDate);
+  ShiftedDate.prototype = RealDate.prototype;
+  Object.setPrototypeOf(ShiftedDate, RealDate);
+  target.Date = ShiftedDate;
+  if (realPerf && target.performance) target.performance.now = () => realPerf() + offset;
+  return { advance(ms) { offset += ms; }, offset() { return offset; } };
+}
+
+export const CLOCK_ADVANCE_MS = 6000;
 
 /**
  * Remove the missing built-ins from this realm, so code run here fails the way it fails in Express.

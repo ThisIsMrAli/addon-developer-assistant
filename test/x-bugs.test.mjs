@@ -88,8 +88,11 @@ test("X4 a failed audit is named in the summary", () => {
   const probe = fs.readFileSync(path.join(reviewSkill, "assets/audit/probe.js"), "utf8");
   assert.match(probe, /function readableText/);
   assert.match(probe, /shadowRoot/);
-  const audit = fs.readFileSync(path.join(reviewSkill, "scripts/audit.mjs"), "utf8");
+  const audit = fs.readFileSync(path.join(reviewSkill, "scripts/lib/audit.mjs"), "utf8");
+  const cli = fs.readFileSync(path.join(reviewSkill, "scripts/audit.mjs"), "utf8");
+  assert.match(cli, /consoleFindings/);
   assert.match(audit, /key: "script-error"[\s\S]{0,180}severity: "error"/);
+  assert.match(audit, /key: "status-error"[\s\S]{0,220}severity: "error"/);
 });
 
 test("X5 the server starts before the certificate is trusted", async () => {

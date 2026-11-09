@@ -130,14 +130,19 @@ export function scanHtml(source) {
     .replace(/<title[\s\S]*?<\/title>/gi, " ");
   const tags = [];
   for (const match of without.matchAll(/<\/?([a-zA-Z][\w:-]*)\b/g)) tags.push(match[1].toLowerCase());
-  const text = without
+  const body = without
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const phrases = [];
+  const push = (raw) => {
+    const text = String(raw || "").replace(/\s+/g, " ").trim();
+    if (text && !phrases.includes(text)) phrases.push(text);
+  };
+  for (const match of body.matchAll(/\b(?:label|placeholder|aria-label|alt|title|heading)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) push(match[1] ?? match[2]);
+  for (const piece of body.replace(/<[^>]+>/g, "\n").split("\n")) push(piece);
+  const text = phrases.join(" ").replace(/\s+/g, " ").trim();
   const controls = tags.some((tag) => PLAIN_CONTROLS.has(tag));
-  return { tags, text, controls };
+  return { tags, text, controls, phrases };
 }
 
 /**
@@ -461,6 +466,62 @@ export function sandboxEngineProblems(files) {
   return [...new Set(problems)];
 }
 
+const SNIFF_GLOBALS = new Set(["process", "Buffer", "setImmediate", "clearImmediate", "__dirname", "__filename", "queueMicrotask"]);
+const SAMPLE_DIMENSIONS = new Set([1920, 1080, 1200, 800, 3840, 2160, 320, 200]);
+const SAMPLE_PAGE = /^(?:1200x800|3840x2160|1920x1080|1080x1920|1080x1080|320x200)$/;
+
+/**
+ * Direct checks a sandbox file can use to behave only inside record: Node globals, the clock,
+ * or a comparison against the historical sample page sizes. Obfuscated lookups are not detected.
+ * That limit is stated on varyScenarios.
+ */
+export function environmentSniffProblems(files) {
+  const problems = [];
+  for (const file of files) {
+    const rel = file.rel || file.file || "";
+    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(rel)) continue;
+    const parsed = parseSource(rel, String(file.text || ""));
+    if (!parsed.ast) continue;
+    const notes = [];
+    walk(parsed.ast, (node, stack) => {
+      if (node.type === "Identifier" && SNIFF_GLOBALS.has(node.name) && !isBindingName(node, stack)) notes.push(`${node.name} at line ${node.loc?.start?.line || 0}`);
+      if (node.type === "UnaryExpression" && node.operator === "typeof" && node.argument?.type === "Identifier" && (SNIFF_GLOBALS.has(node.argument.name) || node.argument.name === "global")) notes.push(`typeof ${node.argument.name}`);
+      if (node.type === "CallExpression" && isClockCall(node.callee)) notes.push(`Date.now() or performance.now() at line ${node.loc?.start?.line || 0}`);
+      if (node.type === "BinaryExpression" && ["===", "==", "!==", "!="].includes(node.operator)) {
+        const lit = node.left?.type === "NumericLiteral" ? node.left : node.right?.type === "NumericLiteral" ? node.right : null;
+        const other = lit === node.left ? node.right : node.left;
+        if (lit && SAMPLE_DIMENSIONS.has(lit.value) && mentionsDimension(other)) notes.push(`a check against the sample page size ${lit.value}`);
+      }
+      if (node.type === "StringLiteral" && SAMPLE_PAGE.test(node.value)) notes.push(`the sample page "${node.value}"`);
+    });
+    if (notes.length) problems.push(`${rel} changes behaviour from the runtime, the clock, or the sample page size (${[...new Set(notes)].slice(0, 4).join("; ")}). record varies the page size and the heading text, moves the clock forward, and hides Node globals, and this check is still a different program in Express than in the sample run. Place the same way on every page.`);
+  }
+  return [...new Set(problems)];
+}
+
+function isClockCall(callee) {
+  if (callee?.type !== "MemberExpression" || callee.computed || callee.property?.name !== "now") return false;
+  return callee.object?.type === "Identifier" && (callee.object.name === "Date" || callee.object.name === "performance");
+}
+
+function mentionsDimension(node) {
+  let found = false;
+  walk(node, (item) => {
+    if (item.type === "Identifier" && (item.name === "width" || item.name === "height")) found = true;
+  });
+  return found;
+}
+
+function isBindingName(node, stack) {
+  const parent = stack[stack.length - 1];
+  if (!parent) return false;
+  if ((parent.type === "VariableDeclarator" || parent.type === "FunctionDeclaration" || parent.type === "FunctionExpression" || parent.type === "ClassDeclaration" || parent.type === "CatchClause") && (parent.id === node || parent.param === node)) return true;
+  if ((parent.type === "FunctionDeclaration" || parent.type === "FunctionExpression" || parent.type === "ArrowFunctionExpression") && (parent.params || []).includes(node)) return true;
+  if (parent.type === "ImportDefaultSpecifier" || parent.type === "ImportSpecifier" || parent.type === "ImportNamespaceSpecifier") return true;
+  if (parent.type === "AssignmentPattern" && parent.left === node) return true;
+  return false;
+}
+
 /** createImageContainer must run in the documented afterAsyncCallback of keepContentActiveDuringAsync. */
 export function imageKeepsContentActive(files) {
   let saw = false;
@@ -673,21 +734,30 @@ function isFunction(node) {
 
 function panelFromAst(ast) {
   const tags = [];
-  const texts = [];
+  const phrases = [];
+  const push = (value) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (text && !phrases.includes(text)) phrases.push(text);
+  };
   walk(ast, (node) => {
     if (node.type === "TaggedTemplateExpression" && tagName(node.tag) === "html") {
       const html = (node.quasi?.quasis || []).map((part) => part.value?.cooked || "").join(" ");
       const scanned = scanHtml(html);
       tags.push(...scanned.tags);
-      if (scanned.text) texts.push(scanned.text);
+      for (const phrase of scanned.phrases || []) push(phrase);
     }
     if (node.type === "JSXOpeningElement") {
       const name = jsxName(node.name);
       if (name) tags.push(name.toLowerCase());
     }
-    if (node.type === "JSXText" && node.value.trim()) texts.push(node.value.replace(/\s+/g, " ").trim());
+    if (node.type === "JSXAttribute" && /^(label|placeholder|alt|title|heading|aria-label)$/i.test(node.name?.name || "")) {
+      const value = node.value;
+      if (value?.type === "StringLiteral") push(value.value);
+      if (value?.type === "JSXExpressionContainer" && value.expression?.type === "StringLiteral") push(value.expression.value);
+    }
+    if (node.type === "JSXText" && node.value.trim()) push(node.value);
   });
-  return describeTags(tags, texts.join(" "));
+  return describeTags(tags, phrases.join(" "), phrases);
 }
 
 function tagName(tag) {
@@ -706,28 +776,32 @@ function jsxName(name) {
 
 function describeHtml(text) {
   const scanned = scanHtml(text);
-  return describeTags(scanned.tags, scanned.text);
+  return describeTags(scanned.tags, scanned.text, scanned.phrases);
 }
 
-function describeTags(tags, text) {
+function describeTags(tags, text, phrases = []) {
   return {
     tags,
     text: String(text || "").replace(/\s+/g, " ").trim(),
+    phrases: phrases || [],
     controls: tags.some((tag) => PLAIN_CONTROLS.has(tag)),
     spectrum: tags.some((tag) => SPECTRUM_CONTROLS.has(tag))
   };
 }
 
 function emptyPanel() {
-  return { tags: [], text: "", controls: false, spectrum: false };
+  return { tags: [], text: "", phrases: [], controls: false, spectrum: false };
 }
 
 function mergePanels(parts) {
   const tags = parts.flatMap((part) => part.tags);
+  const phrases = [];
+  for (const part of parts) for (const phrase of part.phrases || []) if (phrase && !phrases.includes(phrase)) phrases.push(phrase);
   const text = parts.map((part) => part.text).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   return {
     tags,
     text,
+    phrases,
     controls: parts.some((part) => part.controls),
     spectrum: parts.some((part) => part.spectrum)
   };

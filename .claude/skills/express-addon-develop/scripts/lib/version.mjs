@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 export function addonVersionFiles(dir) {
   const files = [];
@@ -32,9 +32,12 @@ export function setAddonVersion(dir, { set = "", bump = "" } = {}) {
   const manifest = files.find((file) => file.endsWith("manifest.json"));
   if (!manifest) throw new Error(`No manifest.json in ${dir} or ${path.join(dir, "src")}.`);
   const current = JSON.parse(fs.readFileSync(manifest, "utf8")).version || "";
+  if (set && bump) throw new Error(`Pass --set or --bump, not both. --set ${set} would hide --bump ${bump}.`);
   if (!set && !bump) return { ok: true, changed: false, version: current, files: files.map((file) => path.relative(dir, file)) };
   const to = set ? String(set).trim() : nextVersion(current, bump);
-  if (!SEMVER.test(to)) throw new Error(`"${to}" is not a version. Express add-on versions are X.Y.Z, for example 1.0.4.`);
+  if (!SEMVER.test(to)) throw new Error(`"${to}" is not a version. Express add-on versions are X.Y.Z with no leading zeros, for example 1.0.4.`);
+  let warning = "";
+  if (SEMVER.test(current) && compareSemver(to, current) < 0) warning = `Version ${to} is lower than the current ${current}. A downgrade is written, and the marketplace may reject a lower version.`;
   const changed = [];
   for (const file of files) {
     const text = fs.readFileSync(file, "utf8");
@@ -46,5 +49,12 @@ export function setAddonVersion(dir, { set = "", bump = "" } = {}) {
     fs.writeFileSync(file, next);
     changed.push(path.relative(dir, file));
   }
-  return { ok: true, changed: true, from: current, version: to, files: changed, note: "Rebuild and package again so the zip carries the new version." };
+  return { ok: true, changed: true, from: current, version: to, files: changed, ...(warning ? { warning } : {}), note: "Rebuild and package again so the zip carries the new version." };
+}
+
+function compareSemver(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
 }

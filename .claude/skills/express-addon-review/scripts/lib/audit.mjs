@@ -323,7 +323,7 @@ async function enterLicense(page, license) {
 }
 
 /** Loads the panel and presses its way to a screen. False when the way no longer exists. */
-async function reach(page, url, trail, license, outcome) {
+async function reach(page, url, trail, license, outcome, theme = "light") {
   await page.forget(new URL(url).origin);
   await page.goto(url);
   await settle(page, 300, 9000);
@@ -341,6 +341,7 @@ async function reach(page, url, trail, license, outcome) {
     const href = await page.eval("location.href").catch(() => "");
     if (href && new URL(href).origin !== new URL(url).origin) return false;
   }
+  await page.eval(themeApplySource(theme)).catch(() => {});
   return true;
 }
 
@@ -407,7 +408,7 @@ export async function walkPanel({ url, themes = ["light", "dark"], maxStates = 2
       const item = queue.shift();
       // Light does not know yet how many screens there are, so it counts what it has found instead of guessing a total.
       progress({ phase: first, found: states.length, doing: `${cap(first)} · ${item.label}` });
-      if (!(await reach(page, url, item.trail, license, outcome).catch(() => false))) continue;
+      if (!(await reach(page, url, item.trail, license, outcome, first).catch(() => false))) continue;
       const result = await page.eval("window.__expressReview.audit()");
       if (seen.has(result.signature)) continue;
       seen.add(result.signature);
@@ -464,7 +465,7 @@ export async function walkPanel({ url, themes = ["light", "dark"], maxStates = 2
         if (timeLeft() < 5000) break;
         progress({ phase: theme, done, total: states.length, exact: true, doing: `${cap(theme)} · ${state.label}` });
         done += 1;
-        if (!(await reach(page, url, state.trail, license).catch(() => false))) continue;
+        if (!(await reach(page, url, state.trail, license, undefined, theme).catch(() => false))) continue;
         const result = await page.eval("window.__expressReview.audit()");
         const fresh = result.findings.filter((finding) => !state.findings.some((old) => old.kind === finding.kind && old.selector === finding.selector));
         for (const finding of fresh) state.findings.push({ ...finding, theme });
@@ -535,8 +536,104 @@ export const DEEP_TEXT = `(() => {
   return lines.join("\\n");
 })()`;
 
-/** How long a press may take to show an error: a delayed status (a slow sandbox call) still counts. */
-export const PRESS_WATCH_MS = 3000;
+/**
+ * How long a press may take to show an error. A 4 second delay on the last button used to be missed,
+ * because the watch stopped at 3 seconds and there was no later press for the error to land on (NP6).
+ * 5.5 seconds covers that delay. A delay longer than this can still be missed on the last button,
+ * or be attached to the next press if one follows.
+ */
+export const PRESS_WATCH_MS = 5500;
+
+/**
+ * Puts the open page into the theme about to be captured. prefers-color-scheme is set on the
+ * browser target as well. A panel that hardcodes `<sp-theme color="light">` stays light under
+ * that media query, and the dashboard then labelled the light picture "Home, dark" (NP10).
+ */
+export function themeApplySource(theme) {
+  const color = theme === "dark" ? "dark" : "light";
+  return `(() => {
+    const color = ${JSON.stringify(color)};
+    const root = document.documentElement;
+    if (root) {
+      root.style.colorScheme = color;
+      root.setAttribute("data-theme", color);
+    }
+    const visit = (node) => {
+      if (!node || typeof node.querySelectorAll !== "function") return;
+      for (const el of node.querySelectorAll("sp-theme, sp-theme-provider")) {
+        try { el.color = color; } catch (e) {}
+        el.setAttribute("color", color);
+      }
+      for (const el of node.querySelectorAll("*")) if (el.shadowRoot) visit(el.shadowRoot);
+    };
+    visit(document);
+    return color;
+  })()`;
+}
+
+/** An error that arrived after a press's watch belongs to that press, not the next click. */
+export function claimLate(actions, lines) {
+  const late = pressErrorLine(lines);
+  const last = actions[actions.length - 1];
+  if (!late || !last || last.ok === false) return last || null;
+  last.ok = false;
+  last.error = late;
+  last.kind = "script";
+  last.late = true;
+  return last;
+}
+
+/**
+ * Notes for the walk's console and for presses that failed. A status the panel showed
+ * ("Could not add the image.") is a failed status. A thrown exception is a script error.
+ */
+export function consoleFindings(seen = {}, actions = [], url = "http://127.0.0.1/") {
+  const found = [];
+  let origin = "";
+  try { origin = new URL(url).origin; } catch { origin = ""; }
+  const crashed = [...new Set([...(seen.exceptions || []), ...uncaughtMessages(seen.console)])];
+  const failed = (actions || []).filter((action) => action && action.ok === false && action.error);
+  const statusFailed = failed.filter((action) => action.kind === "status");
+  const scriptFailed = failed.filter((action) => action.kind !== "status");
+  if (crashed.length || scriptFailed.length) {
+    const unique = [...crashed, ...scriptFailed.map((action) => `${action.label}: ${action.error}`)].slice(0, 3);
+    const count = crashed.length + scriptFailed.length;
+    found.push({
+      key: "script-error",
+      rule: "script-error",
+      severity: "error",
+      screen: "Whole panel",
+      text: `The panel threw ${count} script error${count === 1 ? "" : "s"} while it was walked: ${unique.join(" | ")}. Fix: open the console on that screen and fix the first error.`,
+      themes: [],
+      shotFile: ""
+    });
+  }
+  if (statusFailed.length) {
+    const unique = statusFailed.map((action) => `${action.label}: ${action.error}`).slice(0, 3);
+    found.push({
+      key: "status-error",
+      rule: "status-error",
+      severity: "error",
+      screen: "Whole panel",
+      text: `The panel showed a failed status after ${statusFailed.length} press${statusFailed.length === 1 ? "" : "es"}: ${unique.join(" | ")}. Fix: that text is the panel reporting the failure. It is not a script that failed to load.`,
+      themes: [],
+      shotFile: ""
+    });
+  }
+  const failedLoads = (seen.failed || []).filter((item) => item.url?.startsWith(origin) && !/favicon|\.map(\?|$)|hot-update|sockjs|\/ws$/i.test(item.url || ""));
+  if (failedLoads.length) {
+    found.push({
+      key: "request-failed",
+      rule: "request-failed",
+      severity: "warn",
+      screen: "Whole panel",
+      text: `${failedLoads.length} file${failedLoads.length === 1 ? "" : "s"} from the add-on itself failed to load, such as ${failedLoads[0].url.replace(origin, "")}. Fix: check the path and that the build includes it.`,
+      themes: [],
+      shotFile: ""
+    });
+  }
+  return found;
+}
 
 /** Presses the panel's first actions and records whether the sandbox API answered. */
 export async function exercisePrimary(page, url, { watchMs = PRESS_WATCH_MS } = {}) {
@@ -582,9 +679,13 @@ export async function exercisePrimary(page, url, { watchMs = PRESS_WATCH_MS } = 
       walk(document);
       return [...new Set(found)].slice(0, 12);
     })()`);
+    let lineCursor = 0;
+    const allLines = () => [...(page.seen?.exceptions || []), ...(page.seen?.console || [])];
     for (const label of (labels || []).filter((label) => label && !PRIMARY_SKIP.test(label) && !RISKY.test(label)).slice(0, 3)) {
+      claimLate(actions, allLines().slice(lineCursor));
+      lineCursor = allLines().length;
       await page.eval(fill).catch(() => {});
-      const before = (page.seen?.exceptions?.length || 0) + (page.seen?.console?.length || 0);
+      const before = allLines().length;
       const beforeText = await page.eval(DEEP_TEXT).catch(() => "");
       const clicked = await page.eval(`(() => {
         const want = ${JSON.stringify(label)};
@@ -603,15 +704,20 @@ export async function exercisePrimary(page, url, { watchMs = PRESS_WATCH_MS } = 
       // Watch the whole window: an error that shows 900 ms later is still this press's error.
       const started = Date.now();
       let error = "";
+      let kind = "";
       let afterText = beforeText;
       while (!error && Date.now() - started < watchMs) {
         await sleep(150);
-        const lines = [...(page.seen?.exceptions || []), ...(page.seen?.console || [])].slice(before);
+        const lines = allLines().slice(before);
         afterText = await page.eval(DEEP_TEXT).catch(() => afterText);
-        error = pressErrorLine(lines) || shownStatusError(beforeText, afterText);
+        const script = pressErrorLine(lines);
+        const statusError = shownStatusError(beforeText, afterText);
+        if (script) { error = script; kind = "script"; }
+        else if (statusError) { error = statusError; kind = "status"; }
       }
       const status = shownLines(beforeText, afterText).slice(0, 3).join(" · ");
-      actions.push({ label, ok: Boolean(clicked) && !error, error, status, watchedMs: Date.now() - started });
+      actions.push({ label, ok: Boolean(clicked) && !error, error, kind, status, watchedMs: Date.now() - started });
+      lineCursor = allLines().length;
     }
   } catch (error) {
     actions.push({ label: "primary", ok: false, error: String(error?.message || error) });

@@ -15,7 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { ensureServer, readSources, toNotes, uncaughtMessages, walkPanel } from "./lib/audit.mjs";
+import { consoleFindings, ensureServer, readSources, toNotes, walkPanel } from "./lib/audit.mjs";
 import { findChrome, NO_CHROME } from "./lib/chrome.mjs";
 import { reminder } from "./lib/next.mjs";
 import { resolveOut } from "./lib/paths.mjs";
@@ -185,8 +185,9 @@ async function main() {
   const visible = result.states.some((state) => (Array.isArray(state.texts) ? state.texts : []).some((item) => String(item || "").trim()));
   const blank = errors.some((note) => note.rule === "panel-blank");
   const crashed = errors.some((note) => note.rule === "script-error");
+  const failedStatus = errors.some((note) => note.rule === "status-error");
   const summary = {
-    ok: !blank && !crashed,
+    ok: !blank && !crashed && !failedStatus,
     rendered: result.states.length > 0 && visible && !blank,
     pass: licensed ? "licensed" : "unlicensed",
     screens: result.states.length,
@@ -271,34 +272,7 @@ async function getLicense(out) {
 }
 
 function addConsoleNotes(found, seen, url, actions = []) {
-  const origin = new URL(url).origin;
-  const crashed = [...new Set([...(seen.exceptions || []), ...uncaughtMessages(seen.console)])];
-  const failedActions = (actions || []).filter((action) => action && action.ok === false && action.error);
-  if (crashed.length || failedActions.length) {
-    const unique = [...crashed, ...failedActions.map((action) => `${action.label}: ${action.error}`)].slice(0, 3);
-    const count = crashed.length + failedActions.length;
-    found.push({
-      key: "script-error",
-      rule: "script-error",
-      severity: "error",
-      screen: "Whole panel",
-      text: `The panel threw ${count} script error${count === 1 ? "" : "s"} while it was walked: ${unique.join(" | ")}. Fix: open the console on that screen and fix the first error.`,
-      themes: [],
-      shotFile: ""
-    });
-  }
-  const failed = seen.failed.filter((item) => item.url.startsWith(origin) && !/favicon|\.map(\?|$)|hot-update|sockjs|\/ws$/i.test(item.url));
-  if (failed.length) {
-    found.push({
-      key: "request-failed",
-      rule: "request-failed",
-      severity: "warn",
-      screen: "Whole panel",
-      text: `${failed.length} file${failed.length === 1 ? "" : "s"} from the add-on itself failed to load, such as ${failed[0].url.replace(origin, "")}. Fix: check the path and that the build includes it.`,
-      themes: [],
-      shotFile: ""
-    });
-  }
+  found.push(...consoleFindings(seen, actions, url));
 }
 
 /** Keeps note ids stable across runs: found again stays, gone becomes fixed, new is added. */

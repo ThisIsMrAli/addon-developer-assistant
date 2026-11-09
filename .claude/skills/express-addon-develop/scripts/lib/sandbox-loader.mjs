@@ -7,7 +7,7 @@ import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
 import { parseSource } from "./code-scan.mjs";
-import { MISSING_GLOBAL_NAMES } from "./sandbox-engine.mjs";
+import { hideRuntimeGlobals, MISSING_GLOBAL_NAMES, restoreRuntimeGlobals } from "./sandbox-engine.mjs";
 
 const AsyncFunction = (async () => {}).constructor;
 const quiet = { log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {} };
@@ -110,17 +110,24 @@ export async function loadEntry(entry, doc, text = null, { strict = false } = {}
     const sdk = doc.modules["express-document-sdk"] || {};
     const shadowed = strict ? MISSING_GLOBAL_NAMES : [];
     const run = new AsyncFunction("__import", "__exports", "console", "editor", "constants", "colorUtils", "fonts", ...shadowed, `return (async () => {\n${body}\n})();`);
-    await run(async (spec) => {
-      if (doc.modules[spec]) return doc.modules[spec];
-      if (spec.startsWith(".")) {
-        const found = resolveLocal(file, spec);
-        if (!found) throw new Error(`${path.basename(file)} imports ${spec}, which was not found.`);
-        if (/\.(json)$/i.test(found)) return { default: JSON.parse(fs.readFileSync(found, "utf8")) };
-        if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(found)) return { default: found };
-        return load(found);
-      }
-      return { default: doc.permissive(spec) };
-    }, exportsObject, quiet, ...(strict ? [undefined, undefined, undefined, undefined] : [sdk.editor, sdk.constants, sdk.colorUtils, sdk.fonts]), ...shadowed.map(() => undefined));
+    // Hide Node and the globals Express lacks only while the module body runs. Parsing above still
+    // has Buffer and process. The sample-page child hides them again around each later call (NP1).
+    const hidden = strict ? hideRuntimeGlobals() : null;
+    try {
+      await run(async (spec) => {
+        if (doc.modules[spec]) return doc.modules[spec];
+        if (spec.startsWith(".")) {
+          const found = resolveLocal(file, spec);
+          if (!found) throw new Error(`${path.basename(file)} imports ${spec}, which was not found.`);
+          if (/\.(json)$/i.test(found)) return { default: JSON.parse(fs.readFileSync(found, "utf8")) };
+          if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(found)) return { default: found };
+          return load(found);
+        }
+        return { default: doc.permissive(spec) };
+      }, exportsObject, quiet, ...(strict ? [undefined, undefined, undefined, undefined] : [sdk.editor, sdk.constants, sdk.colorUtils, sdk.fonts]), ...shadowed.map(() => undefined));
+    } finally {
+      if (hidden) restoreRuntimeGlobals(globalThis, hidden);
+    }
     return exportsObject;
   };
   doc.log.entryExports = await load(entry);

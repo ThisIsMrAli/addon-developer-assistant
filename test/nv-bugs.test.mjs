@@ -307,10 +307,12 @@ test("NV10 the live reference cache is ignored and not part of the shipped tree"
   assert.equal(ignored.status, 0, "references/live is gitignored");
 });
 
-test("NV11 the README install line works before the merge and says what changes after it", () => {
+test("NV11 the README install line is the plain repository name on main", () => {
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
-  assert.match(readme, /npx skills add ThisIsMrAli\/addon-developer-assistant#cursor\/import-express-addon-develop-assistant --skill express-addon-review --skill express-addon-develop/);
-  assert.match(readme, /After the pull request is merged into main/);
+  assert.match(readme, /This is the form that works today/);
+  assert.match(readme, /npx skills add ThisIsMrAli\/addon-developer-assistant --skill express-addon-review --skill express-addon-develop/);
+  assert.match(readme, /remote branch was not found/);
+  assert.doesNotMatch(readme, /the form that works today: main has no skills/);
   assert.doesNotMatch(readme, /\/tree\/cursor\//);
 });
 
