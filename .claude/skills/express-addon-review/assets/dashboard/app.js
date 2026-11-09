@@ -314,9 +314,14 @@ function visibleSteps() {
   return steps().filter((step) => step.status !== "skipped" || (step.id === "access" && s?.needsCredential));
 }
 
+/** The steps that count toward "n of m". The rail, the hero and the stats all use this one list. */
+function countedSteps() {
+  return visibleSteps().filter((step) => step.status !== "skipped");
+}
+
 function paintRail() {
   const list = visibleSteps();
-  const counted = session()?.kind === "develop" ? list : list.filter((step) => step.status !== "skipped");
+  const counted = countedSteps();
   const doneCount = counted.filter((step) => step.status === "done").length;
   region(el.railHead, `${doneCount}/${counted.length}`, () => [h("p", { class: "eyebrow", text: "Workflow" }), h("b", { text: `${doneCount} of ${counted.length}` })]);
   const key = JSON.stringify(list.map((step) => [step.id, step.status, step.detail, step.progress, step.startedAt, step.endedAt]));
@@ -399,7 +404,7 @@ function paintHero() {
   const agent = agentState();
   const d = derived();
   const pending = s?.mode === "dashboard" ? pendingAsk() : null;
-  const list = visibleSteps().filter((step) => step.status !== "skipped");
+  const list = countedSteps();
   const running = steps().find((step) => step.status === "running");
   const waiting = steps().find((step) => step.status === "waiting");
   const next = steps().find((step) => step.status === "pending" && step.id !== "done");
@@ -495,7 +500,7 @@ function agentLine(agent) {
 function paintStats() {
   const s = session();
   const d = derived();
-  const list = visibleSteps().filter((step) => step.status !== "skipped");
+  const list = countedSteps();
   const done = list.filter((step) => step.status === "done").length;
   const audit = s?.audit;
   const counts = s?.docs?.counts;

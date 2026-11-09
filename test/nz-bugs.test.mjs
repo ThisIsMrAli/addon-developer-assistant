@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { capturedShots } from "./helpers.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +19,7 @@ import { fillListingDir, listingFrom } from "../.claude/skills/express-addon-dev
 import { exposedSandboxMethods, pngBytes, serveWithStandIn, standInSource } from "../.claude/skills/express-addon-develop/scripts/lib/standin.mjs";
 import { prepareDevCa } from "../.claude/skills/express-addon-develop/scripts/lib/ssl-setup.mjs";
 import { uncaughtMessages } from "../.claude/skills/express-addon-review/scripts/lib/audit.mjs";
+import { boxOf, inside, loadSnippet, overlaps } from "./sandbox-harness.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const reviewSkill = path.join(root, ".claude/skills/express-addon-review");
@@ -100,8 +102,9 @@ test("NZ2 the stand-in exposes the add-on's sandbox API and NZ4 returns a PNG", 
   `);
   assert.deepEqual(heading.sort(), ["addHeading", "addImage"]);
   const source = standInSource(heading);
-  assert.match(source, /addHeading\(\.\.\.args\)/);
-  assert.match(source, /addImage\(\.\.\.args\)/);
+  assert.match(source, /addHeading: async \(\) => ""/);
+  assert.match(source, /addImage: async \(\) => ""/);
+  assert.doesNotMatch(source, /api: "addHeading"|\{ ok: true, api/);
   assert.doesNotMatch(source, /new Blob\(\["png"\]\)/);
   const png = pngBytes();
   assert.equal(png[0], 0x89);
@@ -132,7 +135,7 @@ test("NZ5 listing copy uses the brief, and the stage keeps a panel image", () =>
   const dir = addon({ "index.html": "<!doctype html><html><body><h1>Add heading</h1></body></html>\n" });
   const listingDir = fs.mkdtempSync(path.join(os.tmpdir(), "nz5-listing-"));
   fs.writeFileSync(path.join(listingDir, "02-feature.html"), "<div class=\"stage\"><img src=\"panel-front.png\" alt=\"\"></div><p>Short phrase from the UI</p>\n");
-  const filled = fillListingDir(listingDir, dir);
+  const filled = fillListingDir(listingDir, dir, { shotsDir: capturedShots(640, 1280) });
   assert.equal(filled.ok, true, filled.error);
   const html = fs.readFileSync(path.join(listingDir, "02-feature.html"), "utf8");
   assert.match(html, /panel-front\.png/);
@@ -141,110 +144,56 @@ test("NZ5 listing copy uses the brief, and the stage keeps a panel image", () =>
   assert.equal(png[1], 0x50);
 });
 
-test("NZ6 headings wrap instead of stacking, and an image uses that same slot", () => {
-  class Text {
-    constructor(value) { this.t = value; this.fs = 100; this.translation = { x: 0, y: 0 }; }
-    get boundsLocal() { return { x: 0, y: 0, width: 0.55 * this.fs * this.t.length, height: 1.2 * this.fs }; }
-    get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x, y: this.translation.y, width: box.width, height: box.height }; }
-    get centerPointLocal() { const box = this.boundsLocal; return { x: box.width / 2, y: box.height / 2 }; }
-    get fullContent() { const self = this; return { applyCharacterStyles(style) { if (style.fontSize) self.fs = style.fontSize; } }; }
-    resize({ width, height, behavior }) {
-      const box = this.boundsLocal;
-      let scale = width / box.width;
-      if (height && behavior === "contain") scale = Math.min(scale, height / box.height);
-      this.fs *= scale;
-    }
-    setPositionInParent(point, ref) { this.translation = { x: point.x - ref.x, y: point.y - ref.y }; }
-  }
-  class Picture {
-    constructor(width, height) { this.w = width; this.h = height; this.translation = { x: 0, y: 0 }; }
-    get boundsLocal() { return { x: 0, y: 0, width: this.w, height: this.h }; }
-    get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x, y: this.translation.y, width: box.width, height: box.height }; }
-    get centerPointLocal() { return { x: this.w / 2, y: this.h / 2 }; }
-    resize({ width, height, behavior }) {
-      const box = this.boundsLocal;
-      let scale = width / box.width;
-      if (height && behavior === "contain") scale = Math.min(scale, height / box.height);
-      this.w *= scale;
-      this.h *= scale;
-    }
-    setPositionInParent(point, ref) { this.translation = { x: point.x - ref.x, y: point.y - ref.y }; }
-  }
-  function layout(width, height) {
-    const children = { items: [], append(node) { this.items.push(node); }, [Symbol.iterator]() { return this.items[Symbol.iterator](); } };
-    const page = { width, height, children };
-    const editor = {
-      context: { insertionParent: page, selection: [] },
-      createText: (value) => new Text(value),
-      async loadBitmapImage(blob) { return blob; },
-      createImageContainer(bitmap) { return new Picture(bitmap.width, bitmap.height); },
-      keepContentActiveDuringAsync(_target, _during, after) { after(); return Promise.resolve(); },
-      queueAsyncEdit(callback) { callback(); return Promise.resolve(); }
-    };
-    const body = TEXT_INSIDE_PAGE.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
-    const api = new Function("editor", "constants", `${body}\nreturn { addHeading, addImage };`)(editor, { ResizeBehavior: { contain: "contain" } });
-    return { page, api };
-  }
-  function boxOf(node) {
-    const box = node.boundsInParent;
-    return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height, cx: box.x + box.width / 2 };
-  }
-  function overlaps(a, b) {
-    return a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5;
-  }
-  function assertInside(boxes, width, height) {
-    for (const box of boxes) {
-      assert.ok(box.left >= -0.5 && box.top >= -0.5 && box.right <= width + 0.5 && box.bottom <= height + 0.5, JSON.stringify(box));
-    }
+test("NZ6 headings wrap instead of stacking, and an image uses that same slot", async () => {
+  const assertInside = (boxes, width, height) => {
+    for (const box of boxes) assert.ok(inside(box, width, height), JSON.stringify(box));
     for (let i = 0; i < boxes.length; i += 1) {
       for (let j = i + 1; j < boxes.length; j += 1) assert.equal(overlaps(boxes[i], boxes[j]), false, `${i} overlaps ${j}`);
     }
-  }
-
-  const mixed = layout(1920, 1080);
+  };
+  const mixed = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080 });
   mixed.api.addHeading("Hi");
   mixed.api.addHeading("Hi");
   mixed.api.addHeading("Hi");
-  const beforeImage = mixed.page.children.items.map(boxOf);
+  const beforeImage = mixed.texts().map(boxOf);
   assert.equal(beforeImage.length, 3);
   for (const box of beforeImage) assert.ok(Math.abs(box.cx - 960) < 1, JSON.stringify(box));
   assert.ok(beforeImage[1].top >= beforeImage[0].bottom - 0.5);
   assert.ok(beforeImage[2].top >= beforeImage[1].bottom - 0.5);
-  assert.ok(mixed.page.children.items.every((node) => node.fs <= 72));
-  return mixed.api.addImage({ width: 1600, height: 900 }).then(() => {
-    mixed.api.addHeading("After");
-    const boxes = mixed.page.children.items.map(boxOf);
-    assert.equal(boxes.length, 5);
-    assertInside(boxes, 1920, 1080);
-    const image = boxes[3];
-    const third = boxes[2];
-    assert.ok(image.top >= third.bottom - 0.5, `image ${JSON.stringify(image)} is not below ${JSON.stringify(third)}`);
-    assert.ok(Math.abs(image.cx - 960) < 80, "a fitted image stays in the content column");
-    const full = layout(1920, 1080);
-    for (let n = 0; n < 8; n += 1) full.api.addHeading("Heading");
-    const packed = full.page.children.items.map(boxOf);
-    assert.equal(packed.length, 8);
-    assertInside(packed, 1920, 1080);
-    assert.ok(Math.abs(packed[0].cx - 960) < 1);
-    const centered = addon({
+  assert.ok(mixed.texts().every((node) => node.fontSize <= 72));
+  await mixed.api.addImage({ width: 1600, height: 900 });
+  mixed.api.addHeading("After");
+  const boxes = mixed.nodes().map(boxOf);
+  assert.equal(boxes.length, 5);
+  assertInside(boxes, 1920, 1080);
+  const image = boxOf(mixed.images()[0]);
+  const lastHeading = mixed.texts().map(boxOf).reduce((low, box) => (box.bottom > low.bottom ? box : low));
+  assert.ok(image.top >= lastHeading.bottom - 0.5, `image ${JSON.stringify(image)} is not below ${JSON.stringify(lastHeading)}`);
+  assert.ok(Math.abs(image.cx - 960) < 80, "a fitted image stays in the content column");
+  const full = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080 });
+  for (let n = 0; n < 8; n += 1) full.api.addHeading("Heading");
+  const packed = full.texts().map(boxOf);
+  assert.equal(packed.length, 8);
+  assertInside(packed, 1920, 1080);
+  assert.ok(Math.abs(packed[0].cx - 960) < 1);
+  const centered = addon({
+    "manifest.json": manifest(),
+    "index.html": "<!doctype html><html><body><button>Add image</button></body></html>\n",
+    "code.js": "export async function addImage(blob) { const page = editor.context.insertionParent; const bitmap = await editor.loadBitmapImage(blob); const image = editor.createImageContainer(bitmap); page.children.append(image); image.setPositionInParent({ x: page.width / 2, y: page.height / 2 }, { x: 0, y: 0 }); }\n"
+  });
+  const rejected = verifyFeature({ dir: centered, brief: "Insert an image into the document", build: false });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.problems.join(" "), /boundsInParent|cover|free-space/);
+  const accepted = verifyFeature({
+    dir: addon({
       "manifest.json": manifest(),
       "index.html": "<!doctype html><html><body><button>Add image</button></body></html>\n",
-      "code.js": "export async function addImage(blob) { const page = editor.context.insertionParent; const bitmap = await editor.loadBitmapImage(blob); const image = editor.createImageContainer(bitmap); page.children.append(image); image.setPositionInParent({ x: page.width / 2, y: page.height / 2 }, { x: 0, y: 0 }); }\n"
-    });
-    const rejected = verifyFeature({ dir: centered, brief: "Insert an image into the document", build: false });
-    assert.equal(rejected.ok, false);
-    assert.match(rejected.problems.join(" "), /boundsInParent|cover|free-space/);
-    const accepted = verifyFeature({
-      dir: addon({
-        "manifest.json": manifest(),
-        "index.html": "<!doctype html><html><body><button>Add image</button></body></html>\n",
-        "code.js": TEXT_INSIDE_PAGE
-      }),
-      brief: "Insert an image into the document",
-      build: false
-    });
-    assert.equal(accepted.ok, true, accepted.problems.join(" "));
+      "code.js": TEXT_INSIDE_PAGE
+    }),
+    brief: "Insert an image into the document",
+    build: false
   });
+  assert.equal(accepted.ok, true, accepted.problems.join(" "));
 });
 
 test("NZ8 template boilerplate is not a name error, and a new CA says it was created", async () => {

@@ -14,6 +14,7 @@ import { CREATE_CCWEB_ADD_ON, MANIFEST_NAME, TEXT_INSIDE_PAGE, applyManifestName
 import { classifyFeature, plainSentence } from "../.claude/skills/express-addon-develop/scripts/lib/feasibility.mjs";
 import { developNext } from "../.claude/skills/express-addon-develop/scripts/lib/flow.mjs";
 import { listingFrom } from "../.claude/skills/express-addon-develop/scripts/lib/listing-copy.mjs";
+import { boxOf, inside, loadSnippet, overlaps } from "./sandbox-harness.mjs";
 import { prepareExpressRun } from "../.claude/skills/express-addon-develop/scripts/lib/express-host.mjs";
 import { startDevelopSession, patchDevelop, setStep } from "../.claude/skills/express-addon-develop/scripts/lib/session-start.mjs";
 import { STANDIN_SOURCE, serveWithStandIn } from "../.claude/skills/express-addon-develop/scripts/lib/standin.mjs";
@@ -134,7 +135,9 @@ test("NY2 a real SWC panel is judged from its script, and a loading placeholder 
   const listing = listingFrom({ name: "Heading Image", dir });
   assert.doesNotMatch(listing.summary, /loading/i);
   assert.equal(listing.keywords.includes("loading"), false);
-  assert.match(listing.summary, /Insert heading/);
+  // NV3: the copy says what the code does (createText from a typed value), not a template line.
+  assert.match(listing.summary, /heading/i);
+  assert.doesNotMatch(listing.summary, /works on the current page/i);
 });
 
 test("b v2 and two variants fail on a real SWC template, and the real button passes", async () => {
@@ -204,7 +207,7 @@ test("NX4 a clientStorage parameter bound to localStorage is rejected, and a cat
   assert.equal(helper.unhandledAuthorize, false);
 });
 
-test("NY5 a short heading stays inside a 1920x1080 page and a width-only resize is rejected", () => {
+test("NY5 a short heading stays inside a 1920x1080 page and a width-only resize is rejected", async () => {
   const old = `import { editor, constants } from "express-document-sdk";
 export function addHeading(heading) {
   const page = editor.context.insertionParent;
@@ -226,48 +229,26 @@ export function addHeading(heading) {
   assert.equal(rejected.ok, false);
   assert.match(rejected.problems.join(" "), /width|height|cap|edge/);
 
-  function place(source, pageW, pageH, text) {
-    class Text {
-      constructor(value) { this.t = value; this.fs = 100; this.translation = { x: 0, y: 0 }; }
-      get boundsLocal() { return { x: 0, y: 0, width: 0.55 * this.fs * this.t.length, height: 1.2 * this.fs }; }
-      get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x, y: this.translation.y, width: box.width, height: box.height }; }
-      get centerPointLocal() { const box = this.boundsLocal; return { x: box.width / 2, y: box.height / 2 }; }
-      get fullContent() { const self = this; return { applyCharacterStyles(style) { if (style.fontSize) self.fs = style.fontSize; } }; }
-      resize({ width, height, behavior }) {
-        const box = this.boundsLocal;
-        let scale = width / box.width;
-        if (height && behavior === "contain") scale = Math.min(scale, height / box.height);
-        this.fs *= scale;
-      }
-      setPositionInParent(point, ref) { this.translation = { x: point.x - ref.x, y: point.y - ref.y }; }
-    }
-    const children = { items: [], append(node) { this.items.push(node); }, [Symbol.iterator]() { return this.items[Symbol.iterator](); } };
-    const page = { width: pageW, height: pageH, children };
-    const editor = { context: { insertionParent: page, selection: [] }, createText: (value) => new Text(value) };
-    const body = source.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
-    const fn = new Function("editor", "constants", `${body}\nreturn addHeading;`)(editor, { ResizeBehavior: { contain: "contain" } });
-    fn(text);
-    const node = page.children.items[0];
-    const box = node.boundsLocal;
-    return {
-      fontSize: node.fs,
-      inside: node.translation.x >= -0.5 && node.translation.y >= -0.5 && node.translation.x + box.width <= pageW + 0.5 && node.translation.y + box.height <= pageH + 0.5
-    };
+  async function place(source, pageW, pageH, text) {
+    const run = await loadSnippet(source, { width: pageW, height: pageH });
+    await run.api.addHeading(text);
+    const node = run.texts()[0];
+    return { fontSize: node.fontSize, inside: inside(boxOf(node), pageW, pageH) };
   }
-  const hi = place(TEXT_INSIDE_PAGE, 1920, 1080, "Hi");
+  const hi = await place(TEXT_INSIDE_PAGE, 1920, 1080, "Hi");
   assert.ok(hi.fontSize <= 72, `font ${hi.fontSize}`);
   assert.equal(hi.inside, true);
   for (const [width, height, text] of [[1080, 1080, "Real Express test"], [1080, 1920, "A very long heading that keeps going and going across the page"], [1080, 1080, "Hi"]]) {
-    const laid = place(TEXT_INSIDE_PAGE, width, height, text);
+    const laid = await place(TEXT_INSIDE_PAGE, width, height, text);
     assert.equal(laid.inside, true, `${width}x${height} ${text} font ${laid.fontSize}`);
     assert.ok(laid.fontSize <= 72, `${laid.fontSize}`);
   }
-  const blown = place(old, 1920, 1080, "Hi");
+  const blown = await place(old, 1920, 1080, "Hi");
   assert.ok(blown.fontSize > 200);
   assert.equal(blown.inside, false);
 });
 
-test("NY12 consecutive headings do not share one position", () => {
+test("NY12 consecutive headings do not share one position", async () => {
   const sameSpot = `import { editor, constants } from "express-document-sdk";
 export function addHeading(heading) {
   const page = editor.context.insertionParent;
@@ -295,57 +276,21 @@ export function addHeading(heading) {
   assert.equal(rejected.ok, false, rejected.problems.join(" "));
   assert.match(rejected.problems.join(" "), /overlap|boundsInParent|selection/);
 
-  class Text {
-    constructor(value) { this.t = value; this.fs = 100; this.translation = { x: 0, y: 0 }; }
-    get boundsLocal() { return { x: 0, y: 0, width: 0.55 * this.fs * this.t.length, height: 1.2 * this.fs }; }
-    get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x, y: this.translation.y, width: box.width, height: box.height }; }
-    get centerPointLocal() { const box = this.boundsLocal; return { x: box.width / 2, y: box.height / 2 }; }
-    get fullContent() { const self = this; return { applyCharacterStyles(style) { if (style.fontSize) self.fs = style.fontSize; } }; }
-    resize({ width, height, behavior }) {
-      const box = this.boundsLocal;
-      let scale = width / box.width;
-      if (height && behavior === "contain") scale = Math.min(scale, height / box.height);
-      this.fs *= scale;
-    }
-    setPositionInParent(point, ref) { this.translation = { x: point.x - ref.x, y: point.y - ref.y }; }
-  }
-  function pageOf(width, height, selection = []) {
-    const children = { items: [], append(node) { this.items.push(node); }, [Symbol.iterator]() { return this.items[Symbol.iterator](); } };
-    const page = { width, height, children };
-    const editor = { context: { insertionParent: page, selection }, createText: (value) => new Text(value) };
-    return { page, editor };
-  }
-  function load(editor) {
-    const body = TEXT_INSIDE_PAGE.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
-    return new Function("editor", "constants", `${body}\nreturn addHeading;`)(editor, { ResizeBehavior: { contain: "contain" } });
-  }
-  function boxOf(node) {
-    const box = node.boundsInParent;
-    return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height };
-  }
-  function overlaps(a, b) {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  }
-  const { page, editor } = pageOf(1920, 1080);
-  const add = load(editor);
-  add("Hi");
-  add("There");
-  const boxes = page.children.items.map(boxOf);
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080 });
+  run.api.addHeading("Hi");
+  run.api.addHeading("There");
+  const boxes = run.texts().map(boxOf);
   assert.equal(boxes.length, 2);
   assert.equal(overlaps(boxes[0], boxes[1]), false);
-  for (const box of boxes) {
-    assert.ok(box.left >= -0.5 && box.top >= -0.5 && box.right <= 1920.5 && box.bottom <= 1080.5, JSON.stringify(box));
-  }
+  for (const box of boxes) assert.ok(inside(box, 1920, 1080), JSON.stringify(box));
   assert.ok(boxes[1].top >= boxes[0].bottom - 0.5);
-  assert.ok(page.children.items[0].fs <= 72 && page.children.items[1].fs <= 72);
+  assert.ok(run.texts().every((node) => node.fontSize <= 72));
 
-  const selected = new Text("Already here");
-  selected.fs = 40;
-  selected.translation = { x: 400, y: 80 };
-  const under = pageOf(1920, 1080, [selected]);
-  load(under.editor)("Next");
-  const next = boxOf(under.page.children.items[0]);
-  const prior = boxOf(selected);
+  // Content already on the page (a selected heading, a shape) is not covered: the next heading goes below it.
+  const under = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080, existing: [{ x: 400, y: 80, width: 1100, height: 96 }] });
+  under.api.addHeading("Next");
+  const next = boxOf(under.texts()[0]);
+  const prior = { left: 400, top: 80, right: 1500, bottom: 176 };
   assert.equal(overlaps(next, prior), false);
   assert.ok(next.top >= prior.bottom - 0.5);
   assert.ok(next.bottom <= 1080.5);

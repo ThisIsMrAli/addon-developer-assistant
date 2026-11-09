@@ -55,7 +55,28 @@ export function resolveOut(explicit) {
   if (process.env.EXPRESS_REVIEW_OUT) return path.resolve(process.env.EXPRESS_REVIEW_OUT);
   const last = rememberedOut();
   if (last) return last;
+  const develop = rememberedDevelopOut();
+  if (develop) return develop;
   throw new Error("No review folder. Run review.mjs first, or pass --out.");
+}
+
+/** The develop skill remembers its own session folder; its dashboard is served by this script too. */
+export function rememberedDevelopOut() {
+  if (process.env.EXPRESS_DEVELOP_OUT && fs.existsSync(process.env.EXPRESS_DEVELOP_OUT)) return path.resolve(process.env.EXPRESS_DEVELOP_OUT);
+  try {
+    const last = JSON.parse(fs.readFileSync(path.join(userHome(), ".express-addon-develop", "current.json"), "utf8")).out;
+    return last && fs.existsSync(last) ? last : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every session folder this user's review and develop runs point at, newest pointers first, without repeats. */
+export function knownOuts() {
+  const list = [process.env.EXPRESS_REVIEW_OUT, rememberedOut(), process.env.EXPRESS_DEVELOP_OUT, rememberedDevelopOut()]
+    .filter(Boolean)
+    .map((item) => path.resolve(item));
+  return [...new Set(list)];
 }
 
 function stopDashboard(out) {

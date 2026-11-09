@@ -56,9 +56,16 @@ The GitHub repository is private. The remote install fails with `Authentication 
 # From a checkout of this private repository. This does not need GitHub auth.
 npx skills add . --skill express-addon-review --skill express-addon-develop
 
-# The same command with the remote name, only after GitHub authentication.
+# Remote install while the work is still on the pull-request branch (before merge), after GitHub authentication.
+# Name the branch with "#". This is the form that works today: main has no skills until the merge, and a
+# /tree/<branch> URL breaks because the branch name contains "/".
+npx skills add ThisIsMrAli/addon-developer-assistant#cursor/import-express-addon-develop-assistant --skill express-addon-review --skill express-addon-develop
+
+# After the pull request is merged into main, the plain remote name works, again after GitHub authentication.
 npx skills add ThisIsMrAli/addon-developer-assistant --skill express-addon-review --skill express-addon-develop
 ```
+
+Before the merge, the plain remote name answers "No valid skills found". That is expected: it reads main.
 
 `node install-agents.mjs --global` from this folder is the other path that does not talk to GitHub. If you were sent the preview address instead, download the project from that page and run one of the local commands above.
 

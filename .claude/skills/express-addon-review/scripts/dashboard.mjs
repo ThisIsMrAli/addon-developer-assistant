@@ -3,7 +3,7 @@
  * Start, stop, or inspect the review dashboard.
  *
  *   node scripts/dashboard.mjs start  [--out dir] [--no-open] [--port n]
- *   node scripts/dashboard.mjs stop   [--out dir]
+ *   node scripts/dashboard.mjs stop   [--out dir]   (no --out: every dashboard a review or develop session points at)
  *   node scripts/dashboard.mjs status [--out dir]
  *
  * `start` prints one JSON line. When `ok` is false the agent keeps the review
@@ -13,7 +13,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assetsDir, resolveOut } from "./lib/paths.mjs";
+import { assetsDir, knownOuts, resolveOut } from "./lib/paths.mjs";
 import { createDashboardServer } from "./lib/server.mjs";
 import { files, readServer } from "./lib/session.mjs";
 
@@ -71,17 +71,23 @@ function report(out, info, reused) {
 }
 
 async function stop() {
-  const out = resolveOut(args.out);
-  const info = readServer(out);
-  if (!info) return print({ ok: true, running: false });
-  try {
-    process.kill(info.pid, "SIGTERM");
-  } catch {
-    // Already gone.
+  // Without --out, stop every dashboard a review or develop session on this account points at.
+  const outs = args.out ? [resolveOut(args.out)] : knownOuts();
+  const stopped = [];
+  for (const out of outs) {
+    const info = readServer(out);
+    if (!info) continue;
+    try {
+      process.kill(info.pid, "SIGTERM");
+    } catch {
+      // Already gone.
+    }
+    await until(() => !alive(info.pid), 2500);
+    fs.rmSync(files.server(out), { force: true });
+    stopped.push({ out, pid: info.pid });
   }
-  await until(() => !alive(info.pid), 2500);
-  fs.rmSync(files.server(out), { force: true });
-  print({ ok: true, running: false, stopped: info.pid });
+  if (!stopped.length) return print({ ok: true, running: false, checked: outs });
+  print({ ok: true, running: false, stopped: stopped[0].pid, all: stopped });
 }
 
 async function status() {

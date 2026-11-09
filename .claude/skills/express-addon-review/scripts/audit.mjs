@@ -157,7 +157,7 @@ async function main() {
     signatures: [...new Set([...(licensed ? previous.signatures : []), ...result.states.map((state) => state.signature)])],
     states: [...previousStates, ...result.states.map((state) => ({ label: state.label, trail: state.trail, findings: state.findings.length, shots: state.shots }))],
     console: { exceptions: result.seen.exceptions.slice(0, 10), errors: result.seen.console.slice(0, 10), failed: result.seen.failed.slice(0, 10) },
-    actions: (result.actions || []).map((action) => ({ label: action.label, ok: Boolean(action.ok), error: action.error || "" }))
+    actions: (result.actions || []).map((action) => ({ label: action.label, ok: Boolean(action.ok), error: action.error || "", status: action.status || "", watchedMs: action.watchedMs || 0 }))
   }, null, 2)}\n`);
 
   setAudit(out, {

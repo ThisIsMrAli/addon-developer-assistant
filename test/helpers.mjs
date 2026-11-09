@@ -108,3 +108,10 @@ export function png(width, height) {
   for (let y = 0; y < height; y += 1) rows.push(Buffer.concat([Buffer.from([0]), Buffer.alloc(width)]));
   return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(Buffer.concat(rows))), chunk("IEND", Buffer.alloc(0))]);
 }
+
+/** A folder holding what panel-capture.mjs writes: real-size PNG files named like the captures. */
+export function capturedShots(width = 640, height = 1280) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "panel-capture-"));
+  for (const name of ["panel-front.png", "panel-mid.png", "panel-back.png", "panel-third.png"]) fs.writeFileSync(path.join(dir, name), png(width, height));
+  return dir;
+}

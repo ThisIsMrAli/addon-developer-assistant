@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { capturedShots } from "./helpers.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -219,7 +220,7 @@ test("X10 listing shots do not quote Get Started", () => {
   const listing = fs.mkdtempSync(path.join(os.tmpdir(), "nx-listing-"));
   const prepared = spawnSync(process.execPath, [path.join(reviewSkill, "scripts/prepare-listing.mjs"), "--out", listing], { encoding: "utf8" });
   assert.equal(prepared.status, 0, prepared.stderr);
-  const filled = fillListingDir(listing, dir);
+  const filled = fillListingDir(listing, dir, { shotsDir: capturedShots(640, 1280) });
   assert.equal(filled.ok, true, filled.error);
   assert.ok(filled.phrases.includes("Add heading"));
   assert.equal(filled.phrases.includes("Get Started"), false);

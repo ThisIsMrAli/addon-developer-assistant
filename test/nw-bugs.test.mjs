@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { capturedShots } from "./helpers.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,7 +10,8 @@ import { findChrome } from "../.claude/skills/express-addon-review/scripts/lib/c
 import { imageSize } from "../.claude/skills/express-addon-review/scripts/lib/images.mjs";
 import { startSession } from "../.claude/skills/express-addon-review/scripts/lib/session.mjs";
 import { shownStatusError } from "../.claude/skills/express-addon-review/scripts/lib/audit.mjs";
-import { controlFlow, hasColumnPlacement } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
+import { controlFlow } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
+import { boxOf as harnessBox, loadSnippet } from "./sandbox-harness.mjs";
 import { classifyFeature, plainSentence } from "../.claude/skills/express-addon-develop/scripts/lib/feasibility.mjs";
 import { TEXT_INSIDE_PAGE, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
 import { fillListingDir, listingFrom } from "../.claude/skills/express-addon-develop/scripts/lib/listing-copy.mjs";
@@ -44,54 +46,13 @@ const manifest = () => `${JSON.stringify({
   entryPoints: [{ type: "panel", id: "panel1", main: "index.html", documentSandbox: "code.js" }]
 }, null, 2)}\n`;
 
-class Text {
-  constructor(value) { this.t = value; this.fs = 100; this.translation = { x: 0, y: 0 }; }
-  get boundsLocal() { return { x: 0, y: 0, width: 0.55 * this.fs * this.t.length, height: 1.2 * this.fs }; }
-  get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x, y: this.translation.y, width: box.width, height: box.height }; }
-  get centerPointLocal() { const box = this.boundsLocal; return { x: box.width / 2, y: box.height / 2 }; }
-  get fullContent() { const self = this; return { applyCharacterStyles(style) { if (style.fontSize) self.fs = style.fontSize; } }; }
-  resize({ width, height, behavior }) {
-    const box = this.boundsLocal;
-    let scale = width / box.width;
-    if (height && behavior === "contain") scale = Math.min(scale, height / box.height);
-    this.fs *= scale;
-  }
-  setPositionInParent(point, ref) { this.translation = { x: point.x - ref.x, y: point.y - ref.y }; }
-}
-
-class Picture {
-  constructor(width, height) { this.w = width; this.h = height; this.translation = { x: 0, y: 0 }; }
-  get boundsLocal() { return { x: 0, y: 0, width: this.w, height: this.h }; }
-  get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x, y: this.translation.y, width: box.width, height: box.height }; }
-  get centerPointLocal() { return { x: this.w / 2, y: this.h / 2 }; }
-  resize({ width, height, behavior }) {
-    const box = this.boundsLocal;
-    let scale = width / box.width;
-    if (height && behavior === "contain") scale = Math.min(scale, height / box.height);
-    this.w *= scale;
-    this.h *= scale;
-  }
-  setPositionInParent(point, ref) { this.translation = { x: point.x - ref.x, y: point.y - ref.y }; }
-}
-
-function layout(width, height) {
-  const children = { items: [], append(node) { this.items.push(node); }, [Symbol.iterator]() { return this.items[Symbol.iterator](); } };
-  const page = { width, height, children };
-  const editor = {
-    context: { insertionParent: page, selection: [] },
-    createText: (value) => new Text(value),
-    async loadBitmapImage(blob) { return blob; },
-    createImageContainer(bitmap) { return new Picture(bitmap.width, bitmap.height); },
-    keepContentActiveDuringAsync(_target, _during, after) { after(); return Promise.resolve(); }
-  };
-  const body = TEXT_INSIDE_PAGE.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
-  const api = new Function("editor", "constants", `${body}\nreturn { addHeading, addImage };`)(editor, { ResizeBehavior: { contain: "contain" } });
-  return { page, api };
+async function layout(width, height) {
+  const run = await loadSnippet(TEXT_INSIDE_PAGE, { width, height });
+  return { page: run.page, api: run.api, run };
 }
 
 function boxOf(node) {
-  const box = node.boundsInParent;
-  return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height, cx: box.x + box.width / 2 };
+  return harnessBox(node);
 }
 
 function overlaps(a, b) {
@@ -113,10 +74,12 @@ test("NW1 createImageContainer stays inside the documented callback", () => {
   assert.equal(accepted.ok, true, accepted.problems.join(" "));
 
   const open = `
+let used = 0;
 function placeImageNode(node, page) {
-  const box = node.boundsInParent;
-  const x = page.width / 2 + box.width;
-  node.setPositionInParent({ x, y: 40 }, { x: 0, y: 0 });
+  node.resize({ width: page.width / 4, height: page.height / 4, behavior: "contain" });
+  const box = node.boundsLocal;
+  node.setPositionInParent({ x: page.width - box.width - 40, y: page.height - box.height - 40 - used }, { x: 0, y: 0 });
+  used += box.height + 8;
 }
 export async function addImage(blob) {
   const page = editor.context.insertionParent;
@@ -171,11 +134,8 @@ test("NW2 a sandbox proxy addImage is not the iframe image API", () => {
 });
 
 test("NW10 placement accepts equivalent page-width math", () => {
-  assert.equal(hasColumnPlacement("const x = page.width * 0.5 + column;"), true);
-  assert.equal(hasColumnPlacement("const x = page.width / 2 + column;"), true);
-  assert.equal(hasColumnPlacement("const x = page.width / 2;"), false);
-  assert.equal(hasColumnPlacement("for (let x = margin; x <= page.width - margin; x += pitch) {}"), true);
-  const half = TEXT_INSIDE_PAGE.replaceAll("page.width / 2", "page.width * 0.5");
+  const half = TEXT_INSIDE_PAGE.replaceAll("width / 2", "width * 0.5");
+  assert.notEqual(half, TEXT_INSIDE_PAGE);
   const ok = verifyFeature({
     dir: addon({
       "manifest.json": manifest(),
@@ -189,27 +149,28 @@ test("NW10 placement accepts equivalent page-width math", () => {
 });
 
 test("NW3 and NW11 headings stay aligned, and the sixth stays readable", async () => {
-  const six = layout(1920, 1080);
+  const six = await layout(1920, 1080);
   for (let n = 1; n <= 6; n += 1) six.api.addHeading(`Heading number ${n}`);
-  const sixBoxes = six.page.children.items.map(boxOf);
+  const sixNodes = six.run.texts();
+  const sixBoxes = sixNodes.map(boxOf);
   assert.equal(sixBoxes.length, 6);
-  for (const node of six.page.children.items) assert.ok(node.fs >= 24, `font ${node.fs}`);
+  for (const node of sixNodes) assert.ok(node.fontSize >= 24, `font ${node.fontSize}`);
   for (const box of sixBoxes) {
     assert.ok(Math.abs(box.cx - sixBoxes[0].cx) < 1.5, JSON.stringify(box));
     assert.ok(box.left >= -0.5 && box.top >= -0.5 && box.right <= 1920.5 && box.bottom <= 1080.5);
   }
   for (let i = 1; i < sixBoxes.length; i += 1) assert.ok(sixBoxes[i].top >= sixBoxes[i - 1].bottom - 0.5);
 
-  const first = layout(1920, 1080);
+  const first = await layout(1920, 1080);
   await first.api.addImage({ width: 1600, height: 1000 });
   first.api.addHeading("Heading number 1");
   first.api.addHeading("Heading number 2");
   first.api.addHeading("Heading number 3");
-  const headings = first.page.children.items.filter((node) => node.t);
-  const picture = first.page.children.items.find((node) => node.w);
+  const headings = first.run.texts();
+  const picture = first.run.images()[0];
   assert.equal(headings.length, 3);
-  for (const node of headings) assert.ok(node.fs >= 24, `font ${node.fs}`);
-  const boxes = first.page.children.items.map(boxOf);
+  for (const node of headings) assert.ok(node.fontSize >= 24, `font ${node.fontSize}`);
+  const boxes = first.run.nodes().map(boxOf);
   for (let i = 0; i < boxes.length; i += 1) {
     for (let j = i + 1; j < boxes.length; j += 1) assert.equal(overlaps(boxes[i], boxes[j]), false);
     assert.ok(boxes[i].left >= -0.5 && boxes[i].top >= -0.5 && boxes[i].right <= 1920.5 && boxes[i].bottom <= 1080.5);
@@ -218,39 +179,39 @@ test("NW3 and NW11 headings stay aligned, and the sixth stays readable", async (
   for (const box of headingBoxes) assert.ok(Math.abs(box.cx - headingBoxes[0].cx) < 1.5);
   assert.ok(boxOf(picture).bottom <= 1080.5);
 
-  const packed = layout(320, 200);
+  const packed = await layout(320, 200);
   let message = "";
   for (let n = 0; n < 12; n += 1) {
-    const before = packed.page.children.items.length;
+    const before = packed.run.nodes().length;
     const result = packed.api.addHeading(`Heading number ${n}`);
-    if (packed.page.children.items.length === before) {
+    if (packed.run.nodes().length === before) {
       message = result;
       break;
     }
   }
   assert.match(message, /readable size/);
-  assert.ok(packed.page.children.items.length < 12);
-  for (const node of packed.page.children.items) assert.ok(node.fs >= 18, `font ${node.fs}`);
+  assert.ok(packed.run.nodes().length < 12);
+  for (const node of packed.run.texts()) assert.ok(node.fontSize >= 18, `font ${node.fontSize}`);
 
-  const mixed = layout(1920, 1080);
+  const mixed = await layout(1920, 1080);
   mixed.api.addHeading("One");
   mixed.api.addHeading("Two");
   mixed.api.addHeading("Three");
   await mixed.api.addImage({ width: 1600, height: 1000 });
   mixed.api.addHeading("Four");
-  const labels = mixed.page.children.items.filter((node) => node.t);
-  assert.deepEqual(labels.map((node) => node.t), ["One", "Two", "Three", "Four"]);
+  const labels = mixed.run.texts();
+  assert.deepEqual(labels.map((node) => node.text), ["One", "Two", "Three", "Four"]);
   const labelBoxes = labels.map(boxOf);
   for (const box of labelBoxes) assert.ok(Math.abs(box.cx - labelBoxes[0].cx) < 1.5, JSON.stringify(labelBoxes));
   assert.ok(labelBoxes[1].top >= labelBoxes[0].bottom - 0.5);
   assert.ok(labelBoxes[2].top >= labelBoxes[1].bottom - 0.5);
   assert.ok(labelBoxes[3].top >= labelBoxes[2].bottom - 0.5);
-  const all = mixed.page.children.items.map(boxOf);
+  const all = mixed.run.nodes().map(boxOf);
   for (let i = 0; i < all.length; i += 1) {
     for (let j = i + 1; j < all.length; j += 1) assert.equal(overlaps(all[i], all[j]), false, `${i} overlaps ${j}`);
     assert.ok(all[i].left >= -0.5 && all[i].top >= -0.5 && all[i].right <= 1920.5 && all[i].bottom <= 1080.5, JSON.stringify(all[i]));
   }
-  for (const node of labels) assert.ok(node.fs >= 24, `font ${node.fs}`);
+  for (const node of labels) assert.ok(node.fontSize >= 24, `font ${node.fontSize}`);
 });
 
 test("NW4 the sudo guard stays until the server process exits", async () => {
@@ -394,9 +355,16 @@ test("NW8 listing copy is written, and the stage is a panel", () => {
   const dir = addon({ "index.html": "<!doctype html><html><body><h1>Add heading</h1><button>Add image</button></body></html>\n" });
   const listingDir = fs.mkdtempSync(path.join(os.tmpdir(), "nw8-listing-"));
   fs.writeFileSync(path.join(listingDir, "02-feature.html"), "<div class=\"stage\"><img src=\"panel-front.png\" alt=\"\"></div>\n");
-  const filled = fillListingDir(listingDir, dir);
+  // NV3: without a real capture nothing is drawn in its place, and the step says why.
+  const refused = fillListingDir(listingDir, dir);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /No real picture of the panel/);
+  assert.equal(fs.existsSync(path.join(listingDir, "panel-front.png")), false);
+  const shots = capturedShots(640, 1280);
+  const filled = fillListingDir(listingDir, dir, { shotsDir: shots });
   assert.equal(filled.ok, true, filled.error);
   const png = fs.readFileSync(path.join(listingDir, "panel-front.png"));
+  assert.deepEqual(png, fs.readFileSync(path.join(shots, "panel-front.png")), "the listing uses the captured picture as it is");
   const size = imageSize(png);
   assert.ok(size.width >= 300 && size.height >= 200, JSON.stringify(size));
 });

@@ -488,20 +488,63 @@ export function uncaughtMessages(lines) {
 
 const PRIMARY_SKIP = /^(close|cancel|back|skip)$/i;
 
+/** Error words in text the panel shows. A JavaScript error message counts, even without the word "error". */
+const STATUS_ERROR = /error|failed|could not|couldn't|cannot|can't|unable to|not a function|is not defined|is undefined|is null|undefined is not|null is not|something went wrong|must match|not allowed|denied|invalid|exception|\bthrew\b/i;
+const STATUS_HINT = /type a heading first|^type (a|an|some)\b|^enter (a|an|some)\b|^please (type|enter)\b/i;
+
 /** Text the panel revealed after an action. The empty-field hint is a validation message, not a script error. */
 export function shownStatusError(before, after) {
   const previous = new Set(String(before || "").split("\n").map((line) => line.trim()).filter(Boolean));
   const lines = String(after || "").split("\n").map((line) => line.trim()).filter((line) => line && !previous.has(line));
-  return lines.find((line) => /error|failed|could not|couldn't|unable to|not a function|something went wrong/i.test(line) && !/type a heading first/i.test(line)) || "";
+  return lines.find((line) => STATUS_ERROR.test(line) && !STATUS_HINT.test(line)) || "";
 }
 
+/** Console lines that mean the press failed: an uncaught error, a missing method, or the stand-in reporting a sandbox throw. */
+export function pressErrorLine(lines) {
+  return (lines || []).find((line) => /is not a function|uncaught|unhandled rejection|unhandled promise|express-sdk-stand-in: (sandbox|the sandbox)/i.test(String(line))) || "";
+}
+
+/**
+ * Visible text of the panel, including text inside shadow roots (every Lit or Spectrum component
+ * keeps its status there) and slotted children. document.body.innerText never sees shadow DOM.
+ * One line per text run.
+ */
+export const DEEP_TEXT = `(() => {
+  const lines = [];
+  const visible = (el) => {
+    if (typeof el.checkVisibility === "function") return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    const style = getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden";
+  };
+  const walk = (node) => {
+    if (!node) return;
+    if (node.nodeType === 3) {
+      const text = node.nodeValue.replace(/\\s+/g, " ").trim();
+      if (text) lines.push(text);
+      return;
+    }
+    if (node.nodeType === 1) {
+      const tag = node.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "TEMPLATE" || tag === "NOSCRIPT") return;
+      if (!visible(node)) return;
+      if (node.shadowRoot) walk(node.shadowRoot);
+    }
+    for (const child of node.childNodes || []) walk(child);
+  };
+  walk(document.body || document.documentElement);
+  return lines.join("\\n");
+})()`;
+
+/** How long a press may take to show an error: a delayed status (a slow sandbox call) still counts. */
+export const PRESS_WATCH_MS = 3000;
+
 /** Presses the panel's first actions and records whether the sandbox API answered. */
-export async function exercisePrimary(page, url) {
+export async function exercisePrimary(page, url, { watchMs = PRESS_WATCH_MS } = {}) {
   const actions = [];
   try {
     await page.goto(url);
     await settle(page, 250, 2000);
-    await page.eval(`(() => {
+    const fill = `(() => {
       const sample = "Sample heading";
       const skip = /license|token|password|secret|key/i;
       const set = (el) => {
@@ -510,29 +553,28 @@ export async function exercisePrimary(page, url) {
         const current = "value" in el ? String(el.value || "") : "";
         if (current.trim()) return;
         el.value = sample;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       };
       const walk = (root) => {
         const nodes = root.querySelectorAll ? root.querySelectorAll("input, textarea, sp-textfield, sp-textarea") : [];
         for (const el of nodes) {
-          if (el.matches && el.matches("input[type='password'], input[type='hidden']")) continue;
+          if (el.matches && el.matches("input[type='password'], input[type='hidden'], input[type='file']")) continue;
           set(el);
-          if (el.shadowRoot) walk(el.shadowRoot);
         }
         const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
-        for (const el of all) if (el.shadowRoot) walk(el.shadowRoot);
+        for (const el of all) if (el.shadowRoot && !el.matches("sp-textfield, sp-textarea")) walk(el.shadowRoot);
       };
       walk(document);
-    })()`);
+    })()`;
+    await page.eval(fill);
     const labels = await page.eval(`(() => {
       const found = [];
       const walk = (root) => {
-        const nodes = root.querySelectorAll ? root.querySelectorAll("button, sp-button, [role='button']") : [];
+        const nodes = root.querySelectorAll ? root.querySelectorAll("button, sp-button, sp-action-button, [role='button']") : [];
         for (const el of nodes) {
           const label = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
           if (label) found.push(label.slice(0, 80));
-          if (el.shadowRoot) walk(el.shadowRoot);
         }
         const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
         for (const el of all) if (el.shadowRoot) walk(el.shadowRoot);
@@ -541,16 +583,16 @@ export async function exercisePrimary(page, url) {
       return [...new Set(found)].slice(0, 12);
     })()`);
     for (const label of (labels || []).filter((label) => label && !PRIMARY_SKIP.test(label) && !RISKY.test(label)).slice(0, 3)) {
+      await page.eval(fill).catch(() => {});
       const before = (page.seen?.exceptions?.length || 0) + (page.seen?.console?.length || 0);
-      const beforeText = await page.eval("document.body ? document.body.innerText : ''");
+      const beforeText = await page.eval(DEEP_TEXT).catch(() => "");
       const clicked = await page.eval(`(() => {
         const want = ${JSON.stringify(label)};
         const walk = (root) => {
-          const nodes = root.querySelectorAll ? root.querySelectorAll("button, sp-button, [role='button']") : [];
+          const nodes = root.querySelectorAll ? root.querySelectorAll("button, sp-button, sp-action-button, [role='button']") : [];
           for (const el of nodes) {
             const text = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
             if (text === want) { el.click(); return true; }
-            if (el.shadowRoot && walk(el.shadowRoot)) return true;
           }
           const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
           for (const el of all) if (el.shadowRoot && walk(el.shadowRoot)) return true;
@@ -558,16 +600,28 @@ export async function exercisePrimary(page, url) {
         };
         return walk(document);
       })()`);
-      await sleep(300);
-      const lines = [...(page.seen?.exceptions || []), ...(page.seen?.console || [])].slice(before);
-      const afterText = await page.eval("document.body ? document.body.innerText : ''");
-      const error = lines.find((line) => /is not a function|uncaught|unhandled rejection|unhandled promise/i.test(line)) || shownStatusError(beforeText, afterText);
-      actions.push({ label, ok: Boolean(clicked) && !error, error });
+      // Watch the whole window: an error that shows 900 ms later is still this press's error.
+      const started = Date.now();
+      let error = "";
+      let afterText = beforeText;
+      while (!error && Date.now() - started < watchMs) {
+        await sleep(150);
+        const lines = [...(page.seen?.exceptions || []), ...(page.seen?.console || [])].slice(before);
+        afterText = await page.eval(DEEP_TEXT).catch(() => afterText);
+        error = pressErrorLine(lines) || shownStatusError(beforeText, afterText);
+      }
+      const status = shownLines(beforeText, afterText).slice(0, 3).join(" · ");
+      actions.push({ label, ok: Boolean(clicked) && !error, error, status, watchedMs: Date.now() - started });
     }
   } catch (error) {
     actions.push({ label: "primary", ok: false, error: String(error?.message || error) });
   }
   return actions;
+}
+
+function shownLines(before, after) {
+  const previous = new Set(String(before || "").split("\n").map((line) => line.trim()).filter(Boolean));
+  return String(after || "").split("\n").map((line) => line.trim()).filter((line) => line && !previous.has(line));
 }
 
 function cap(text) {

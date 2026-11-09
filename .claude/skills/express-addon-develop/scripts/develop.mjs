@@ -17,6 +17,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { reminder } from "../../express-addon-review/scripts/lib/next.mjs";
 import { addShot, appendAnswerLine, publishAsk, readMerged, setListing } from "../../express-addon-review/scripts/lib/session.mjs";
 import { originAsk } from "./lib/flow.mjs";
@@ -24,12 +25,14 @@ import { fetchDevDocs, pagesForBrief } from "./lib/docs-live.mjs";
 import { classifyFeature, pagesFromDisk } from "./lib/feasibility.mjs";
 import { applyManifestName, gate, implementationHandoff, scaffoldProject, scrubTemplateChrome, verifyFeature } from "./lib/implement.mjs";
 import { fillListingDir, listingFrom } from "./lib/listing-copy.mjs";
+import { setAddonVersion } from "./lib/version.mjs";
 import { buildProject, packageProject } from "./lib/package-addon.mjs";
 import { homeDir, liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
 import { patchDevelop, saveDocs, saveFeasibility, saveTemplates, setStep, startDevelopSession } from "./lib/session-start.mjs";
 import { builtDir, serveWithStandIn } from "./lib/standin.mjs";
 import { fetchTemplates } from "./lib/templates.mjs";
 
+const here = path.dirname(fileURLToPath(import.meta.url));
 const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
 
@@ -45,6 +48,7 @@ try {
   else if (command === "audit") await audit();
   else if (command === "listing-text") listingText();
   else if (command === "listing-shots") listingShots();
+  else if (command === "version") version();
   else usage();
   process.exit(0);
 } catch (error) {
@@ -393,7 +397,18 @@ function listingShots() {
   const listingDir = path.join(out, "listing");
   const prepared = spawnSync(process.execPath, [path.join(reviewScripts, "prepare-listing.mjs"), "--out", listingDir], { encoding: "utf8" });
   if (prepared.status !== 0) throw new Error(prepared.stderr || prepared.stdout || "prepare-listing failed.");
-  const filled = fillListingDir(listingDir, session.addon.path);
+  // Real pictures of the built panel, taken in headless Chrome. No drawn panel stands in for them.
+  const shotsDir = path.join(listingDir, "panel-capture");
+  const captured = spawnSync(process.execPath, [path.join(here, "lib", "panel-capture.mjs"), "--dir", session.addon.path, "--out", shotsDir], { encoding: "utf8", timeout: 90000 });
+  let capture = {};
+  try {
+    capture = JSON.parse((captured.stdout || "").trim().split("\n").at(-1) || "{}");
+  } catch {
+    capture = { ok: false, error: (captured.stderr || "The panel capture produced no result.").trim().slice(-500) };
+  }
+  if (captured.error?.code === "ETIMEDOUT") capture = { ok: false, error: "Chrome did not finish the panel pictures in 90 seconds." };
+  const filled = fillListingDir(listingDir, session.addon.path, { shotsDir: capture.ok ? shotsDir : "", shotsError: capture.ok ? "" : capture.error });
+  fs.rmSync(shotsDir, { recursive: true, force: true });
   if (!filled.ok) {
     patchDevelop(out, { listingShots: "failed", listingShotsReason: filled.error });
     print({ ok: false, skipped: true, done: false, rendered: false, capturedOn: "not captured", expressPass: false, reason: filled.error }, out);
@@ -432,6 +447,18 @@ function listingShots() {
     capturedOn: "this computer",
     expressPass: false
   }, out);
+}
+
+function version() {
+  let dir = args.dir ? path.resolve(args.dir) : "";
+  let out = "";
+  if (!dir) {
+    out = resolveOut();
+    dir = readMerged(out).addon.path;
+  }
+  const result = setAddonVersion(dir, { set: args.set || "", bump: args.bump || "" });
+  if (out && result.changed) patchDevelop(out, { version: result.version });
+  print(result, out);
 }
 
 function listingText() {
@@ -563,7 +590,7 @@ function copyPanelCaptures(out, reviewOut) {
 }
 
 function usage() {
-  process.stdout.write("Usage: develop.mjs begin|docs|templates|classify|implement|record|build|package|audit|listing-text|listing-shots\n");
+  process.stdout.write("Usage: develop.mjs begin|docs|templates|classify|implement|record|build|package|audit|listing-text|listing-shots|version [--set X.Y.Z | --bump patch|minor|major] [--dir add-on]\n");
   process.exit(1);
 }
 
