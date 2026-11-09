@@ -90,9 +90,9 @@ export function expressResultAsk() {
     title: "BETA: what happened in Express",
     prompt: "Did the add-on panel render inside Adobe Express, and did you exercise the feature? Sign-in is yours. This skill never takes credentials. Leave chrome://flags/#local-network-access-check enabled and click Allow. Connect Add-on testing to https://localhost:5241 (not 127.0.0.1), then launch from In development. A failure or a timeout is recorded as that.",
     options: [
+      { id: "skip", label: "Stop this beta check (Recommended)", detail: "Does not count as an Express pass. The listing is next." },
       { id: "rendered", label: "The panel rendered and I exercised the feature", detail: "Counts as a real Express pass only together with a screenshot of that panel." },
-      { id: "failed", label: "It failed or timed out", detail: "Recorded as a failure. Not a pass." },
-      { id: "skip", label: "Stop this beta check", detail: "Does not count as an Express pass. The listing is next." }
+      { id: "failed", label: "It failed or timed out", detail: "Recorded as a failure. Not a pass." }
     ]
   };
 }
@@ -323,8 +323,15 @@ function listingNext(session, { answered, published, ask }) {
     return { action: "draft-listing", command: "node scripts/develop.mjs listing-text", say: "Draft the listing again from the same sources." };
   }
   if (wantsShots && !(session.shots || []).some((shot) => shot.kind === "listing")) {
-    return { action: "make-shots", command: "node scripts/develop.mjs listing-shots", say: "Render the screenshots with the cloned listing tools, then ask shots-review." };
+    if (session.develop?.listingShots !== "skipped") {
+      return { action: "make-shots", command: "node scripts/develop.mjs listing-shots", say: "Render the screenshots with the cloned listing tools, then ask shots-review. If Chrome cannot run, the command says so and does not claim a capture." };
+    }
   }
-  if (wantsShots && !published("shots-review")) return ask("shots-review");
-  return { action: "run", command: "node scripts/session.mjs step --id listing --status done --detail \"Listing handled\"", say: "Mark the listing done, then finish." };
+  if (wantsShots && session.develop?.listingShots !== "skipped" && !published("shots-review")) return ask("shots-review");
+  const skippedShots = wantsShots && session.develop?.listingShots === "skipped";
+  const detail = skippedShots ? "Listing handled. Screenshots were not taken" : "Listing handled";
+  const say = skippedShots
+    ? "Screenshots were not taken, and nothing was claimed as captured. Mark the listing done, then finish."
+    : "Mark the listing done, then finish.";
+  return { action: "run", command: `node scripts/session.mjs step --id listing --status done --detail "${detail}"`, say };
 }

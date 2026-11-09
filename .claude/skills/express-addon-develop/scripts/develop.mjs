@@ -18,12 +18,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { reminder } from "../../express-addon-review/scripts/lib/next.mjs";
-import { readMerged, setListing } from "../../express-addon-review/scripts/lib/session.mjs";
+import { addShot, appendAnswerLine, publishAsk, readMerged, setListing } from "../../express-addon-review/scripts/lib/session.mjs";
+import { originAsk } from "./lib/flow.mjs";
 import { fetchDevDocs } from "./lib/docs-live.mjs";
 import { classifyFeature, pagesFromDisk } from "./lib/feasibility.mjs";
 import { applyFeature, gate, scaffoldProject } from "./lib/implement.mjs";
 import { buildProject, packageProject } from "./lib/package-addon.mjs";
-import { liveDir, rememberedOut, reviewScripts } from "./lib/paths.mjs";
+import { liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
 import { patchDevelop, saveDocs, saveFeasibility, saveTemplates, setStep, startDevelopSession } from "./lib/session-start.mjs";
 import { builtDir, serveWithStandIn } from "./lib/standin.mjs";
 import { fetchTemplates } from "./lib/templates.mjs";
@@ -41,22 +42,77 @@ try {
   else if (command === "package") pack();
   else if (command === "audit") await audit();
   else if (command === "listing-text") listingText();
+  else if (command === "listing-shots") listingShots();
   else usage();
 } catch (error) {
-  process.stdout.write(`${JSON.stringify({ ok: false, error: error.message })}\n`);
+  let next = "Run `node scripts/session.mjs next` and do what it says. Do not end your turn.";
+  try {
+    const out = resolveOut();
+    next = reminder(out, { dashboardUp: dashboardUp(out) });
+  } catch {
+    // No session yet. The sentence above is still a next line.
+  }
+  process.stdout.write(`${JSON.stringify({ ok: false, error: error.message, next })}\n`);
   process.exit(1);
 }
 
 function begin() {
   if (!args.dir) throw new Error("Use --dir for the empty folder or the existing add-on.");
-  const out = path.resolve(args.out || path.join(path.dirname(path.resolve(args.dir)), `.develop-${path.basename(args.dir)}`));
-  startDevelopSession(out, { name: args.name || path.basename(args.dir), dir: path.resolve(args.dir), brief: args.brief || "" });
+  const dir = path.resolve(args.dir);
+  const out = path.resolve(args.out || path.join(path.dirname(dir), `.develop-${path.basename(dir)}`));
+  const facts = inspectFolder(dir);
+  if (args.empty && !facts.empty) {
+    throw new Error(`${dir} is not an empty folder. --empty was not applied, and nothing in the folder was deleted.`);
+  }
+  if (!args.fresh && sameSession(out, dir)) {
+    rememberOut(out);
+    print({
+      ok: true,
+      out,
+      resumed: true,
+      network: false,
+      next: "The session is already open for this folder. Nothing was deleted. Run `node scripts/session.mjs next` and do what it says. Do not end your turn."
+    }, null);
+    return;
+  }
+  if (args.fresh) fs.rmSync(path.join(out, "answers.jsonl"), { force: true });
+  startDevelopSession(out, { name: args.name || path.basename(dir), dir, brief: args.brief || "" });
+  const existing = Boolean(facts.manifest) && !args.empty;
+  patchDevelop(out, { empty: Boolean(args.empty) || facts.empty, folder: existing ? "existing" : "empty" });
+  if (existing) {
+    const published = publishAsk(out, originAsk());
+    appendAnswerLine(out, { type: "answer", askId: "origin", nonce: published.ask.nonce, value: "existing", via: "detected", at: new Date().toISOString() });
+    setStep(out, "origin", "done", "This folder already has an add-on");
+    setStep(out, "template", "skipped", "An existing add-on does not get a template");
+  }
   print({
     ok: true,
     out,
     network: false,
-    next: "Ask the mode question in questions.json with AskQuestion, then `node scripts/session.mjs mode --set dashboard|chat`. Do not fetch the docs before that. Do not end your turn."
+    empty: Boolean(args.empty) || facts.empty,
+    existing,
+    next: "Ask the mode question in questions.json with AskQuestion, then `node scripts/session.mjs mode --set dashboard` or `node scripts/session.mjs mode --set chat`. Do not fetch the docs before that. Do not end your turn."
   }, null);
+}
+
+function sameSession(out, dir) {
+  try {
+    const session = JSON.parse(fs.readFileSync(path.join(out, "session.json"), "utf8"));
+    return session.kind === "develop" && path.resolve(session.addon?.path || "") === dir;
+  } catch {
+    return false;
+  }
+}
+
+function inspectFolder(dir) {
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name !== ".gitkeep" && name !== ".git");
+  } catch {
+    names = [];
+  }
+  const manifest = fs.existsSync(path.join(dir, "manifest.json")) || fs.existsSync(path.join(dir, "src", "manifest.json"));
+  return { empty: names.length === 0, manifest };
 }
 
 async function docs() {
@@ -87,6 +143,8 @@ async function docs() {
     fs.mkdirSync(liveDir, { recursive: true });
     fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   }
+  const counts = result.counts;
+  setStep(out, "docs", "done", `${counts.fresh} fresh, ${counts.stale} stale, ${counts.failed} failed`);
   print({ ok: true, ...result }, out);
 }
 
@@ -124,7 +182,8 @@ function implement() {
   if (!decision.ok) throw new Error(decision.error);
   const dir = session.addon.path;
   if (!dir) throw new Error("The session has no add-on folder.");
-  if (decision.origin === "new") scaffoldProject({ dir, template: decision.template });
+  const already = fs.existsSync(path.join(dir, "src", "manifest.json")) || fs.existsSync(path.join(dir, "manifest.json"));
+  if (decision.origin === "new" && !already) scaffoldProject({ dir, template: decision.template });
   const applied = applyFeature({
     dir,
     feature: decision.feature,
@@ -145,6 +204,7 @@ function build() {
   const result = buildProject(session.addon.path);
   if (!result.ok) throw new Error(result.error || "Build failed.");
   patchDevelop(out, { built: true, buildNote: result.note });
+  setStep(out, "build", "done", result.note || "Build finished");
   print({ ok: true, ...result }, out);
 }
 
@@ -155,6 +215,7 @@ function pack() {
   const result = packageProject(session.addon.path);
   if (!result.ok) throw new Error(result.error || "Package failed.");
   patchDevelop(out, { packaged: true, zip: result.zip, packageVia: result.via });
+  setStep(out, "package", "done", "Package written");
   print({ ok: true, ...result }, out);
 }
 
@@ -163,13 +224,27 @@ async function audit() {
   const session = readMerged(out);
   const project = session.addon.path;
   if (!project) throw new Error("No add-on folder.");
+  if (process.env.SKIP_BROWSER_TESTS) {
+    const record = browserRun({
+      standIn: "express-sdk-stand-in",
+      screens: 0,
+      note: "The box runner does not start Chrome or Edge. The panel was not walked and nothing was captured."
+    });
+    patchDevelop(out, { audited: true, auditOk: false, auditBugs: [], standIn: record.standIn, expressPass: false, rendered: false });
+    fs.writeFileSync(path.join(out, "browser-run.json"), `${JSON.stringify(record, null, 2)}\n`);
+    setStep(out, "audit", "done", "Browser walk skipped");
+    print({ ok: true, skipped: true, ...record }, out);
+    return;
+  }
   const reviewOut = path.join(out, "review");
-  fs.rmSync(reviewOut, { recursive: true, force: true });
-  const review = spawnSync(process.execPath, [path.join(reviewScripts, "review.mjs"), "--input", project, "--no-refresh", "--out", reviewOut], {
+  const staging = path.join(out, "review-next");
+  fs.rmSync(staging, { recursive: true, force: true });
+  const review = spawnSync(process.execPath, [path.join(reviewScripts, "review.mjs"), "--input", project, "--no-refresh", "--out", staging], {
     encoding: "utf8",
     env: { ...process.env, EXPRESS_REVIEW_NO_OPEN: "1" }
   });
-  if (!fs.existsSync(path.join(reviewOut, "session.json"))) {
+  if (!fs.existsSync(path.join(staging, "session.json"))) {
+    fs.rmSync(staging, { recursive: true, force: true });
     throw new Error(review.stderr || review.stdout || "Add-on Review did not start a session.");
   }
   const source = builtDir(project);
@@ -177,7 +252,7 @@ async function audit() {
   const served = await serveWithStandIn(source);
   let auditJson = {};
   try {
-    const ran = spawnSync(process.execPath, [path.join(reviewScripts, "audit.mjs"), "--out", reviewOut, "--url", served.url], {
+    const ran = spawnSync(process.execPath, [path.join(reviewScripts, "audit.mjs"), "--out", staging, "--url", served.url], {
       encoding: "utf8",
       timeout: 240000,
       env: { ...process.env, EXPRESS_REVIEW_NO_OPEN: "1" }
@@ -192,31 +267,100 @@ async function audit() {
   } finally {
     await served.close();
   }
+  fs.rmSync(reviewOut, { recursive: true, force: true });
+  fs.renameSync(staging, reviewOut);
   const bugs = auditJson.bugs || [];
+  const screens = auditJson.screens || 0;
+  const record = browserRun({
+    standIn: served.label,
+    screens,
+    url: served.url,
+    note: "Headless Chrome served the built panel with an SDK stand-in. This is not an Adobe Express pass.",
+    audit: auditJson
+  });
   patchDevelop(out, {
     audited: true,
     auditOk: bugs.length === 0 && auditJson.ok !== false,
     auditBugs: bugs,
     standIn: served.label,
     expressPass: false,
+    rendered: false,
     reviewOut
   });
-  fs.writeFileSync(path.join(out, "browser-run.json"), `${JSON.stringify({
-    standIn: served.label,
-    expressPass: false,
-    url: served.url,
-    note: "Headless Chrome served the built panel with an SDK stand-in. This is not an Adobe Express pass.",
-    audit: auditJson
-  }, null, 2)}\n`);
+  fs.writeFileSync(path.join(out, "browser-run.json"), `${JSON.stringify(record, null, 2)}\n`);
+  setStep(out, "audit", "done", screens ? `Walked ${screens} screens with the stand-in` : "Audit finished");
   print({
     ok: bugs.length === 0 && auditJson.ok !== false,
     bugs,
-    screens: auditJson.screens || 0,
+    screens,
     warnings: auditJson.warnings || 0,
-    standIn: served.label,
-    expressPass: false,
+    ...record,
     reviewOut,
     reviewStatus: review.status
+  }, out);
+}
+
+function browserRun({ standIn, screens, url, note, audit }) {
+  return {
+    standIn,
+    expressPass: false,
+    rendered: false,
+    headlessScreens: screens,
+    capturedOn: screens > 0 ? "this computer" : "not captured",
+    ...(url ? { url } : {}),
+    note,
+    ...(audit ? { audit } : {})
+  };
+}
+
+function listingShots() {
+  const out = resolveOut();
+  const session = readMerged(out);
+  const reason = process.env.SKIP_BROWSER_TESTS
+    ? "The box runner does not start Chrome or Edge."
+    : "";
+  if (reason) {
+    patchDevelop(out, { listingShots: "skipped", listingShotsReason: reason });
+    print({
+      ok: true,
+      skipped: true,
+      rendered: false,
+      capturedOn: "not captured",
+      expressPass: false,
+      reason,
+      note: "No screenshot was written, and none was claimed."
+    }, out);
+    return;
+  }
+  const listingDir = path.join(out, "listing");
+  const prepared = spawnSync(process.execPath, [path.join(reviewScripts, "prepare-listing.mjs"), "--out", listingDir], { encoding: "utf8" });
+  if (prepared.status !== 0) throw new Error(prepared.stderr || prepared.stdout || "prepare-listing failed.");
+  const rendered = spawnSync(process.execPath, [path.join(reviewScripts, "render-listing.mjs"), "--dir", listingDir, "--input", session.addon.path], {
+    encoding: "utf8",
+    timeout: 90000
+  });
+  if (rendered.error?.code === "ETIMEDOUT" || rendered.status !== 0) {
+    const why = rendered.error?.code === "ETIMEDOUT"
+      ? "Chrome did not finish the listing screenshots, so it cannot run here."
+      : (rendered.stderr || rendered.stdout || "Listing screenshots were not rendered.").slice(-500);
+    patchDevelop(out, { listingShots: "skipped", listingShotsReason: why });
+    print({ ok: true, skipped: true, rendered: false, capturedOn: "not captured", expressPass: false, reason: why }, out);
+    return;
+  }
+  const finalDir = path.join(listingDir, "final");
+  const written = [];
+  if (fs.existsSync(finalDir)) {
+    for (const name of fs.readdirSync(finalDir).filter((item) => item.endsWith(".png"))) {
+      written.push(addShot(out, { file: path.join(finalDir, name), label: name, kind: "listing" }).shot.file);
+    }
+  }
+  patchDevelop(out, { listingShots: written.length ? "written" : "skipped", listingShotFiles: written });
+  print({
+    ok: written.length > 0,
+    files: written,
+    rendered: false,
+    capturedOn: written.length ? "this computer" : "not captured",
+    expressPass: false
   }, out);
 }
 
@@ -253,21 +397,43 @@ function resolveOut() {
 
 function print(value, out) {
   const body = { ...value };
-  if (out && body.next === undefined && body.ok !== false) body.next = reminder(out);
+  if (body.next === undefined) {
+    body.next = out
+      ? reminder(out, { dashboardUp: dashboardUp(out) })
+      : "Run `node scripts/session.mjs next` and do what it says. Do not end your turn.";
+  }
   process.stdout.write(`${JSON.stringify(body)}\n`);
 }
 
+function dashboardUp(out) {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(out, "server.json"), "utf8"));
+    if (!info?.pid) return false;
+    process.kill(info.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
 function usage() {
-  process.stdout.write("Usage: develop.mjs begin|docs|templates|classify|implement|build|package|audit|listing-text\n");
+  process.stdout.write("Usage: develop.mjs begin|docs|templates|classify|implement|build|package|audit|listing-text|listing-shots\n");
   process.exit(1);
 }
 
 function parseArgs(argv) {
+  const flags = new Set(["empty", "fresh"]);
   const parsed = {};
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (!token.startsWith("--")) continue;
-    parsed[token.slice(2)] = argv[i + 1];
+    const key = token.slice(2);
+    const next = argv[i + 1];
+    if (flags.has(key) && (next === undefined || String(next).startsWith("--"))) {
+      parsed[key] = true;
+      continue;
+    }
+    parsed[key] = next;
     i += 1;
   }
   return parsed;

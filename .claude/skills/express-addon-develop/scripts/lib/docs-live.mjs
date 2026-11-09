@@ -29,9 +29,17 @@ export async function fetchDevDocs({
 } = {}) {
   const started = Date.now();
   const budget = new AbortController();
-  const timer = setTimeout(() => budget.abort(), budgetMs);
-  const results = await Promise.all(pages.map((id) => one(id, { pageMs, budget, cacheDir, destDir, fetchImpl })));
-  clearTimeout(timer);
+  let budgetTimer;
+  const budgetDone = new Promise((resolve) => {
+    budgetTimer = setTimeout(() => {
+      budget.abort();
+      resolve("budget");
+    }, budgetMs);
+  });
+  const work = Promise.all(pages.map((id) => one(id, { pageMs, budget, cacheDir, destDir, fetchImpl })));
+  await Promise.race([work, budgetDone]);
+  clearTimeout(budgetTimer);
+  const results = await work;
   const counts = {
     fresh: results.filter((page) => page.label === "fresh").length,
     stale: results.filter((page) => page.label === "stale").length,
@@ -70,18 +78,37 @@ async function one(id, { pageMs, budget, cacheDir, destDir, fetchImpl }) {
 
 function fetchWithTimeout(fetchImpl, url, ms, parent) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
-  const onParent = () => ctrl.abort();
+  let timer;
+  let settled = false;
+  let rejectCancelled = () => {};
+  const onParent = () => {
+    ctrl.abort();
+    if (!settled) rejectCancelled(new Error("overall budget"));
+  };
   if (parent) {
     if (parent.aborted) ctrl.abort();
     else parent.addEventListener("abort", onParent);
   }
-  return Promise.resolve()
-    .then(() => fetchImpl(url, { signal: ctrl.signal, headers: { "user-agent": "express-addon-develop", accept: "text/plain" } }))
-    .finally(() => {
-      clearTimeout(timer);
-      parent?.removeEventListener("abort", onParent);
-    });
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      ctrl.abort();
+      reject(new Error("timeout"));
+    }, ms);
+  });
+  const cancelled = new Promise((_, reject) => {
+    rejectCancelled = reject;
+    if (parent?.aborted) reject(new Error("overall budget"));
+  });
+  const request = Promise.resolve().then(() => fetchImpl(url, {
+    signal: ctrl.signal,
+    headers: { "user-agent": "express-addon-develop", accept: "text/plain" }
+  }));
+  // Race even when fetch ignores the abort signal, and always clear the timer so the process can exit.
+  return Promise.race([request, timeout, cancelled]).finally(() => {
+    settled = true;
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", onParent);
+  });
 }
 
 function readCache(cacheDir, id) {

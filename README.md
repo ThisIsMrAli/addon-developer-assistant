@@ -40,7 +40,13 @@ From this folder:
 node install-agents.mjs --global
 ```
 
-That links the skill into the agent folders on this machine, including Claude, Cursor, Codex, Gemini, and Windsurf. Use `node install-agents.mjs` without `--global` to link it only inside this project.
+That links both skills into the agent folders on this machine, including Claude, Cursor, Codex, Gemini, and Windsurf. Use `node install-agents.mjs` without `--global` to link them only inside this project.
+
+`npx skills add` copies each skill directory on its own. Install both, into the same parent, or the develop skill cannot see Add-on Review:
+
+```bash
+npx skills add <owner>/express-addon-review --skill express-addon-review --skill express-addon-develop
+```
 
 If you were sent the preview address instead of the repository, download the project from that page. The repository itself is private.
 
