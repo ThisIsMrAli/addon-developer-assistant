@@ -89,8 +89,9 @@ test("the Express step is immediately before listing, and skip goes straight to 
   assert.equal(finished.develop.expressPass, false);
   assert.equal(finished.develop.standIn, "express-sdk-stand-in");
   const html = fs.readFileSync(path.join(finished.addon.path, "src/index.html"), "utf8");
-  assert.match(html, /id="develop-feature"/);
+  assert.match(html, /id="caption-field"/);
   assert.match(html, /Caption/);
+  assert.doesNotMatch(html, /develop-feature|featureReady/);
 });
 
 test("dashboard mode asks on the dashboard, and a stopped server falls back to AskQuestion", async () => {

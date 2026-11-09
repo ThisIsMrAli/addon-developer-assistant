@@ -213,22 +213,89 @@ export function checkTrusted(origin = DEV_ORIGIN) {
   });
 }
 
-export async function waitForDevServer({ cwd, spawnImpl = spawn, check = checkTrusted, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutMs = 45000, intervalMs = 1000 } = {}) {
+export function identifyDevServer(origin, expectedName) {
+  if (origin !== DEV_ORIGIN) return Promise.resolve({ ok: false, error: `Refusing ${origin}. The dev server is ${DEV_ORIGIN}.` });
+  const name = String(expectedName || "").trim();
+  return new Promise((resolve) => {
+    const request = https.get(origin, { rejectUnauthorized: true, timeout: 8000 }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if (name && !body.includes(name)) {
+          resolve({ ok: false, error: `https://localhost:5241 is not this add-on. The listing does not contain “${name}”.` });
+          return;
+        }
+        resolve({ ok: true, name });
+      });
+    });
+    request.on("timeout", () => {
+      request.destroy();
+      resolve({ ok: false, error: "timeout" });
+    });
+    request.on("error", (error) => resolve({ ok: false, error: error.code || error.message }));
+  });
+}
+
+/**
+ * Start `npm start` first. The dev CA is created by that server.
+ * Trust runs only after the CA file exists, then the certificate is checked, then the listing is checked.
+ */
+export async function openDevServer({
+  cwd,
+  spawnImpl = spawn,
+  trust = async () => ({ ok: true }),
+  caReady = () => true,
+  check = checkTrusted,
+  identify = async () => ({ ok: true }),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  timeoutMs = 45000,
+  intervalMs = 1000
+} = {}) {
   if (!cwd) return { ok: false, outcome: "failed", error: "No add-on folder to serve.", trusted: false };
   const child = spawnImpl("npm", ["start"], { cwd, detached: true, stdio: "ignore" });
   if (child && typeof child.unref === "function") child.unref();
   const started = Date.now();
+  while (!caReady()) {
+    if (Date.now() - started >= timeoutMs) {
+      return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: "npm start did not create the dev CA. The certificate was not checked before the server started." };
+    }
+    await sleep(intervalMs);
+  }
+  const setup = await trust();
+  if (setup && setup.ok === false) {
+    return { ok: false, trusted: false, pid: child?.pid ?? null, outcome: "failed", error: setup.error || "The dev CA was not trusted.", setup };
+  }
+  const remaining = Math.max(0, timeoutMs - (Date.now() - started));
+  const checked = await waitForDevServer({ cwd, child, check, identify, sleep, timeoutMs: remaining, intervalMs });
+  return { ...checked, setup };
+}
+
+export async function waitForDevServer({ cwd, spawnImpl = spawn, child = null, check = checkTrusted, identify = async () => ({ ok: true }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutMs = 45000, intervalMs = 1000 } = {}) {
+  if (!cwd) return { ok: false, outcome: "failed", error: "No add-on folder to serve.", trusted: false };
+  const startedChild = child || spawnImpl("npm", ["start"], { cwd, detached: true, stdio: "ignore" });
+  if (!child && startedChild && typeof startedChild.unref === "function") startedChild.unref();
+  const started = Date.now();
   let last = { ok: false, trusted: false, error: "not checked" };
   do {
     last = await check(DEV_ORIGIN);
-    if (last.trusted) return { ok: true, trusted: true, pid: child?.pid ?? null, outcome: "ready" };
+    if (last.fatal) {
+      return { ok: false, trusted: false, pid: startedChild?.pid ?? null, outcome: "failed", error: last.error || "The dev CA was not trusted." };
+    }
+    if (last.trusted) {
+      const who = await identify(DEV_ORIGIN);
+      if (who && who.ok === false) {
+        return { ok: false, trusted: true, pid: startedChild?.pid ?? null, outcome: "wrong-server", error: who.error || "Port 5241 is serving a different add-on." };
+      }
+      return { ok: true, trusted: true, pid: startedChild?.pid ?? null, outcome: "ready", identity: who?.name || "" };
+    }
     if (Date.now() - started >= timeoutMs) break;
     await sleep(intervalMs);
   } while (Date.now() - started < timeoutMs);
   return {
     ok: false,
     trusted: false,
-    pid: child?.pid ?? null,
+    pid: startedChild?.pid ?? null,
     outcome: last.error === "timeout" || !last.trusted ? "timeout" : "failed",
     error: last.error || "https://localhost:5241 did not present a trusted certificate in time."
   };

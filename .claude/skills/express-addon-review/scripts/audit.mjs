@@ -272,7 +272,7 @@ function addConsoleNotes(found, seen, url) {
     found.push({
       key: "script-error",
       rule: "script-error",
-      severity: "warn",
+      severity: "error",
       screen: "Whole panel",
       text: `The panel threw ${seen.exceptions.length} script error${seen.exceptions.length === 1 ? "" : "s"} while it was walked: ${unique.join(" | ")}. Fix: open the console on that screen and fix the first error.`,
       themes: [],

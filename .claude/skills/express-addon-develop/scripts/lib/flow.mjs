@@ -2,6 +2,7 @@
  * Develop-session steps and the `next` decision.
  * A review session never reaches this. Skip on the BETA Express step goes straight to listing.
  */
+import { briefNeeds } from "./implement.mjs";
 
 export const DEVELOP_STEPS = [
   { id: "docs", label: "Fetch the Adobe docs", hint: "Live pages, in parallel, with a time budget. Each page is fresh, stale, or failed." },
@@ -66,7 +67,7 @@ export function implementAsk() {
     title: "Write the feature",
     prompt: "Write the feature from the fetched docs? Nothing has been written to the add-on yet.",
     options: [
-      { id: "write", label: "Write the feature from the docs (Recommended)", detail: "Edits only what the feasibility answer allows, citing the page that allowed it." },
+      { id: "write", label: "Write the feature from the docs (Recommended)", detail: "The agent writes it from the brief and the fetched pages. The step checks the code and rejects a stub." },
       { id: "stop", label: "Stop", detail: "Writes nothing and ends the session." }
     ]
   };
@@ -111,11 +112,34 @@ export function listingAsk() {
   };
 }
 
-export function templateAsk(ids) {
-  const options = ids.map((id, index) => ({
+/** Pick a fetched template because of the brief. A name that was not fetched is never recommended. */
+export function recommendTemplate(ids, brief = "") {
+  const list = Array.isArray(ids) ? ids : [];
+  const needs = briefNeeds(brief);
+  const wantsDocument = needs.includes("text") || needs.includes("image");
+  const wantsSpectrum = needs.includes("panel") || /\bspectrum\b/i.test(String(brief || ""));
+  const prefer = [];
+  if (wantsDocument && wantsSpectrum) prefer.push("swc-javascript-with-document-sandbox");
+  if (wantsDocument) prefer.push("javascript-with-document-sandbox");
+  if (wantsSpectrum) prefer.push("swc-javascript");
+  prefer.push("javascript");
+  const id = prefer.find((item) => list.includes(item)) || list[0] || "";
+  const reason = {
+    "swc-javascript-with-document-sandbox": "The brief needs document sandbox APIs and a Spectrum panel, and this fetched template includes both.",
+    "javascript-with-document-sandbox": "The brief adds text or an image to the document, so the template has to include the document sandbox.",
+    "swc-javascript": "The brief is a Spectrum form in the panel, and this fetched template starts with Spectrum Web Components.",
+    javascript: "The brief is panel UI, and this fetched template is the plain JavaScript panel."
+  }[id] || "This is the fetched template that matches the brief.";
+  return { id, reason };
+}
+
+export function templateAsk(ids, brief = "") {
+  const recommended = recommendTemplate(ids, brief);
+  const ordered = recommended.id ? [recommended.id, ...ids.filter((id) => id !== recommended.id)] : ids;
+  const options = ordered.map((id) => ({
     id,
-    label: index === 0 ? `${id} (Recommended)` : id,
-    detail: index === 0 ? "First name in the list Adobe's CLI published for this fetch." : "Fetched from the CLI package. Not a remembered list."
+    label: id === recommended.id ? `${id} (Recommended)` : id,
+    detail: id === recommended.id ? recommended.reason : "Fetched from the CLI package. Not a remembered list."
   }));
   return {
     id: "template",
@@ -169,10 +193,7 @@ export function developNext(session, { dashboardUp = false } = {}) {
     : { action: "ask-in-chat", ask: id, command: `node scripts/session.mjs ask --id ${id}`, say: `Ask \`${id}\` with AskQuestion, then record it with session.mjs answer.` };
 
   if (step("done")?.status === "done") {
-    const passed = session.develop?.expressPass === true;
-    const expressLine = passed
-      ? "The beta Express check passed: the panel rendered and the feature was exercised."
-      : "The beta Express check did not pass.";
+    const expressLine = expressOutcome(session);
     return { action: "finished", say: `The build is finished. Give the user the summary. Run \`node scripts/dashboard.mjs stop\` if the dashboard is still up. ${expressLine} This is not marketplace approval.` };
   }
   if (!session.mode) {
@@ -194,7 +215,8 @@ export function developNext(session, { dashboardUp = false } = {}) {
       return { action: "run", command: "node scripts/develop.mjs docs", say: "Fetch the Adobe docs now. The dashboard shows fresh, stale, and failed as the pages return." };
     }
     const counts = session.docs.counts || {};
-    return { action: "run", command: `node scripts/session.mjs step --id docs --status done --detail "${counts.fresh || 0} fresh, ${counts.stale || 0} stale, ${counts.failed || 0} failed"`, say: "The fetch is recorded. Mark the docs step done." };
+    const failed = counts.failed ? ` ${counts.failed} pages failed. Say that before the next question.` : "";
+    return { action: "run", command: `node scripts/session.mjs step --id docs --status done --detail "${counts.fresh || 0} fresh, ${counts.stale || 0} stale, ${counts.failed || 0} failed"`, say: `The fetch is recorded. Mark the docs step done.${failed}` };
   }
 
   if (open("origin")) {
@@ -226,15 +248,30 @@ export function developNext(session, { dashboardUp = false } = {}) {
     return { action: "run", command: "node scripts/session.mjs step --id design --status done --detail \"Design answered\"", say: "Mark design done. Still write nothing." };
   }
 
+  if (session.develop?.blockedEmpty && open("implement")) {
+    return { action: "finish", command: "node scripts/session.mjs done --summary \"Stopped. The folder was not empty, so nothing was scaffolded.\"", say: "The folder is not empty. Do not run implement again." };
+  }
+
   if (open("implement")) {
     if (!answered("implement")) return ask("implement");
     if (answered("implement").answer === "stop") {
       return { action: "finish", command: "node scripts/session.mjs done --summary \"Stopped before any file was written.\"", say: "The user stopped before the write. Close the session. No project file was written." };
     }
-    if (!session.develop?.implemented) {
-      return { action: "run", command: "node scripts/develop.mjs implement", say: "The gate is open. Scaffold if this is a new folder, then implement the feature from the docs." };
+    if (!session.develop?.handoff) {
+      return { action: "run", command: "node scripts/develop.mjs implement", say: "Scaffold if this is a new folder, then hand the brief, the fetched pages, and the APIs to the agent. Do not write a stub." };
     }
-    return { action: "run", command: "node scripts/session.mjs step --id implement --status done --detail \"Feature written from the docs\"", say: "Mark implement done." };
+    if (!session.develop?.implemented || session.develop?.verify?.ok !== true) {
+      const handoff = session.develop.handoff;
+      return {
+        action: "awaiting-agent-implementation",
+        command: "node scripts/develop.mjs record",
+        say: "Write the feature yourself from the brief, the fetched pages, and the APIs below. Then run record. A stub is rejected, and the step is not done until record passes.",
+        brief: handoff.brief,
+        pages: handoff.pages,
+        apis: handoff.apis
+      };
+    }
+    return { action: "run", command: "node scripts/session.mjs step --id implement --status done --detail \"Feature verified against the brief\"", say: "The feature was verified. Mark implement done." };
   }
 
   if (open("build")) {
@@ -251,7 +288,12 @@ export function developNext(session, { dashboardUp = false } = {}) {
     if (!session.develop?.audited) {
       return { action: "run", command: "node scripts/develop.mjs audit", say: "Run Add-on Review's audit. The browser uses an SDK stand-in. That is not an Express pass." };
     }
-    return { action: "run", command: "node scripts/session.mjs step --id audit --status done --detail \"Audit finished\"", say: "Mark the audit done. The BETA Express step is next, and it is optional." };
+    const failed = session.develop?.auditOk === false;
+    const detail = failed ? "Audit failed" : "Audit finished";
+    const say = failed
+      ? "The audit failed. Say that in the summary. Do not call it a pass. The BETA Express step is next, and it is optional."
+      : "Mark the audit done. The BETA Express step is next, and it is optional.";
+    return { action: "run", command: `node scripts/session.mjs step --id audit --status done --detail "${detail}"`, say };
   }
 
   // Immediately before listing. Skip does not insert another step.
@@ -300,11 +342,17 @@ export function developNext(session, { dashboardUp = false } = {}) {
 
   if (open("listing")) return listingNext(session, { answered, published, ask });
 
-  const passed = session.develop?.expressPass === true;
-  const summary = passed
-    ? "Beta Express passed: the panel rendered and the feature was exercised. This is not marketplace approval."
-    : "Beta Express did not pass. This is not marketplace approval.";
+  const summary = `${expressOutcome(session)} This is not marketplace approval.`;
   return { action: "finish", command: `node scripts/session.mjs done --summary "${summary}"`, say: "Run done, then stop the dashboard. Say whether the beta Express check passed, failed, or was skipped. Do not call it marketplace approval." };
+}
+
+function expressOutcome(session) {
+  const express = (session.steps || []).find((step) => step.id === "express");
+  const audit = session.develop?.auditOk === false ? "The audit failed. " : "";
+  let expressLine = "The beta Express check did not pass.";
+  if (session.develop?.expressPass === true) expressLine = "The beta Express check passed: the panel rendered and the feature was exercised.";
+  else if (express?.status === "skipped") expressLine = "The beta Express check was skipped.";
+  return `${audit}${expressLine}`;
 }
 
 function listingNext(session, { answered, published, ask }) {
@@ -322,16 +370,18 @@ function listingNext(session, { answered, published, ask }) {
   if (wantsText && answered("listing-review")?.answer === "redo") {
     return { action: "draft-listing", command: "node scripts/develop.mjs listing-text", say: "Draft the listing again from the same sources." };
   }
-  if (wantsShots && !(session.shots || []).some((shot) => shot.kind === "listing")) {
-    if (session.develop?.listingShots !== "skipped") {
-      return { action: "make-shots", command: "node scripts/develop.mjs listing-shots", say: "Render the screenshots with the cloned listing tools, then ask shots-review. If Chrome cannot run, the command says so and does not claim a capture." };
+  const shotsReady = (session.shots || []).some((shot) => shot.kind === "listing");
+  if (wantsShots && !shotsReady) {
+    const shots = session.develop?.listingShots;
+    if (shots === "failed" || shots === "skipped") {
+      return {
+        action: "run",
+        command: "node scripts/session.mjs step --id listing --status skipped --detail \"Screenshots did not render. The listing step is not done.\"",
+        say: "The screenshots did not render, so this step is not marked done. Do not run the same command again."
+      };
     }
+    return { action: "make-shots", command: "node scripts/develop.mjs listing-shots", say: "Render the screenshots with the cloned listing tools, then ask shots-review. If they do not render, the step is not done." };
   }
-  if (wantsShots && session.develop?.listingShots !== "skipped" && !published("shots-review")) return ask("shots-review");
-  const skippedShots = wantsShots && session.develop?.listingShots === "skipped";
-  const detail = skippedShots ? "Listing handled. Screenshots were not taken" : "Listing handled";
-  const say = skippedShots
-    ? "Screenshots were not taken, and nothing was claimed as captured. Mark the listing done, then finish."
-    : "Mark the listing done, then finish.";
-  return { action: "run", command: `node scripts/session.mjs step --id listing --status done --detail "${detail}"`, say };
+  if (wantsShots && !published("shots-review")) return ask("shots-review");
+  return { action: "run", command: "node scripts/session.mjs step --id listing --status done --detail \"Listing handled\"", say: "Mark the listing done, then finish." };
 }

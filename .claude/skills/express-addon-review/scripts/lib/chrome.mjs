@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,41 +38,85 @@ export const NO_CHROME =
 
 /** Photographs `url` at an exact viewport. Throws when no file comes out. */
 export function shoot({ chrome, url, out, width, height, scale = 1, background = "FFFFFFFF", timeout = 60_000 }) {
-  // A fresh profile stops a running Chrome from swallowing the command.
+  // A fresh profile stops a running Chrome from swallowing the command. On a brand-new
+  // profile Chrome 156 can sit on the first-run dialog and never exit, so that attempt
+  // is killed with its process group and, if it wrote nothing, retried without a profile.
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "express-addon-review-chrome-"));
   fs.rmSync(out, { force: true });
-  const args = [
+  const shared = [
     "--headless=new",
     "--disable-gpu",
     "--hide-scrollbars",
     "--no-first-run",
     "--no-default-browser-check",
-    `--user-data-dir=${profile}`,
+    "--disable-fre",
+    "--noerrdialogs",
+    "--disable-search-engine-choice-screen",
     `--force-device-scale-factor=${scale}`,
     `--window-size=${width},${height}`,
     `--default-background-color=${background}`,
-    `--screenshot=${out}`,
-    url
+    `--screenshot=${out}`
   ];
-  // Linux CI containers run as root, where Chrome refuses to start with its sandbox.
-  if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) args.unshift("--no-sandbox");
-  let result;
+  if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) shared.unshift("--no-sandbox");
+  const profileBudget = Math.min(timeout, 8000);
   try {
-    result = spawnSync(chrome, args, { encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"] });
+    const first = captureOnce(chrome, [...shared, `--user-data-dir=${profile}`, url], out, profileBudget);
+    if (first === "wrote") return;
+    fs.rmSync(out, { force: true });
+    const second = captureOnce(chrome, [...shared, url], out, timeout);
+    if (second === "wrote") return;
   } finally {
-    // Chrome can still be releasing the profile when the screenshot returns, especially if several runs overlap.
     try {
       fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch {
-      // A profile left behind is not a failed picture. The file check below decides that.
+      // A profile left behind is not a failed picture.
     }
   }
-  if (!fs.existsSync(out)) {
-    const seconds = Math.max(1, Math.round(timeout / 1000));
-    if (result?.error?.code === "ETIMEDOUT" || result?.signal) {
-      throw new Error(`Chrome at ${chrome} did not finish within ${seconds}s, so it cannot run here. It was started with --headless=new --screenshot and did not write ${out}.`);
+  throw new Error(`Chrome at ${chrome} cannot run here: it did not write ${out}. It was started with --headless=new --screenshot.`);
+}
+
+function captureOnce(chrome, args, out, timeout) {
+  const child = spawn(chrome, args, { stdio: "ignore", detached: true });
+  const pid = child.pid;
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (fileReady(out)) {
+      killGroup(pid);
+      return "wrote";
     }
-    const detail = String(result?.stderr || result?.error?.message || "").trim();
-    throw new Error(`Chrome at ${chrome} cannot run here: it did not write ${out}.${detail ? ` ${detail}` : ""}`);
+    if (pid && !alive(pid)) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  killGroup(pid);
+  return fileReady(out) ? "wrote" : "timeout";
+}
+
+function fileReady(file) {
+  try {
+    return fs.statSync(file).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function killGroup(pid) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
   }
 }

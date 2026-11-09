@@ -49,7 +49,7 @@ The headless audit does not open Adobe Express. A browser run of the panel is no
 node scripts/develop.mjs begin --dir /absolute/path --name "Name" --brief "What to add"
 ```
 
-   `--dir` is an empty folder, or an add-on that already has a manifest. `--empty` means the folder is a new add-on. It is refused when the folder is not empty, and nothing is deleted. A folder that already has a manifest skips the empty-folder question. Running `begin` again on the same folder resumes the session and does not wipe answers or project files. Nothing is copied and nothing is fetched.
+   `--dir` is an empty folder, or an add-on that already has a manifest. The session is written to `~/.express-addon-develop/<slug>/` unless you pass `--out`. `--name` is the marketplace name and is applied to the manifest. `--empty` means the folder is a new add-on. It is refused when the folder is not empty, and nothing is deleted. A folder that is not empty and has no manifest is refused at the start, and nothing is deleted. A folder that already has a manifest skips the empty-folder question. Running `begin` again on the same folder resumes the session and does not wipe answers or project files. Nothing is copied and nothing is fetched. A second session moves the pointer and leaves the previous dashboard running.
 
 2. **Ask where to follow the build.** Call AskQuestion with the `mode` object in `questions.json`. Title is `Next step`. Pass `prompt` and each option's `id` and `label` through unchanged.
 
@@ -70,9 +70,13 @@ node scripts/develop.mjs begin --dir /absolute/path --name "Name" --brief "What 
 
 8. **Implement.** Ask `implement`. Until the answer is `write`, and until origin, template (when the folder is new), feasibility, and design are answered, no project file is written. `stop` ends the session with nothing written.
 
+   `node scripts/develop.mjs implement` scaffolds a new folder and hands you the brief, the fetched pages, and the APIs. It does not write the feature. You write it, then record it:
+
 ```bash
-node scripts/develop.mjs implement
+node scripts/develop.mjs record
 ```
+
+   Document text uses `editor.createText()` in the document sandbox, with a style. An image uses `addImage()` or `createImage()`. A Spectrum panel uses Spectrum Web Components (`sp-textfield`, `sp-button`, `sp-theme`). Network and OAuth need `permissions.oauth` in the manifest. `record` checks that the code calls those APIs, that the project builds, and that the manifest has the permissions. A stub (`featureReady`, a `develop-feature` field, or the template's Create Rectangle left as the feature) is rejected. The step is not done until `record` passes. Do not say the feature was written from the docs before that.
 
 9. **Build and package.**
 

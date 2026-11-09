@@ -120,7 +120,8 @@ function readCache(cacheDir, id) {
 }
 
 function writeBoth(cacheDir, destDir, id, text) {
-  if (cacheDir && process.env.EXPRESS_DEVELOP_KEEP_CACHE !== "1") writeFile(path.join(cacheDir, id), text);
+  // The installed skill cache is left alone unless a caller opts in. The session copy is the one this run uses.
+  if (cacheDir && process.env.EXPRESS_DEVELOP_WRITE_CACHE === "1") writeFile(path.join(cacheDir, id), text);
   if (destDir) writeFile(path.join(destDir, id), text);
 }
 

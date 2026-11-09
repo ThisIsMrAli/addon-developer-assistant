@@ -22,9 +22,10 @@ import { addShot, appendAnswerLine, publishAsk, readMerged, setListing } from ".
 import { originAsk } from "./lib/flow.mjs";
 import { fetchDevDocs } from "./lib/docs-live.mjs";
 import { classifyFeature, pagesFromDisk } from "./lib/feasibility.mjs";
-import { applyFeature, gate, scaffoldProject } from "./lib/implement.mjs";
+import { applyManifestName, gate, implementationHandoff, scaffoldProject, verifyFeature } from "./lib/implement.mjs";
+import { fillListingDir } from "./lib/listing-copy.mjs";
 import { buildProject, packageProject } from "./lib/package-addon.mjs";
-import { liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
+import { homeDir, liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
 import { patchDevelop, saveDocs, saveFeasibility, saveTemplates, setStep, startDevelopSession } from "./lib/session-start.mjs";
 import { builtDir, serveWithStandIn } from "./lib/standin.mjs";
 import { fetchTemplates } from "./lib/templates.mjs";
@@ -38,12 +39,14 @@ try {
   else if (command === "templates") await templates();
   else if (command === "classify") classify();
   else if (command === "implement") implement();
+  else if (command === "record") record();
   else if (command === "build") build();
   else if (command === "package") pack();
   else if (command === "audit") await audit();
   else if (command === "listing-text") listingText();
   else if (command === "listing-shots") listingShots();
   else usage();
+  process.exit(0);
 } catch (error) {
   let next = "Run `node scripts/session.mjs next` and do what it says. Do not end your turn.";
   try {
@@ -59,7 +62,7 @@ try {
 function begin() {
   if (!args.dir) throw new Error("Use --dir for the empty folder or the existing add-on.");
   const dir = path.resolve(args.dir);
-  const out = path.resolve(args.out || path.join(path.dirname(dir), `.develop-${path.basename(dir)}`));
+  const out = path.resolve(args.out || path.join(homeDir(), slugFrom(args.name || path.basename(dir))));
   const facts = inspectFolder(dir);
   if (args.empty && !facts.empty) {
     throw new Error(`${dir} is not an empty folder. --empty was not applied, and nothing in the folder was deleted.`);
@@ -74,6 +77,9 @@ function begin() {
       next: "The session is already open for this folder. Nothing was deleted. Run `node scripts/session.mjs next` and do what it says. Do not end your turn."
     }, null);
     return;
+  }
+  if (!facts.empty && !facts.manifest) {
+    throw new Error(`${dir} is not an empty folder and has no add-on manifest. Nothing was deleted. Start from an empty folder, or point --dir at an existing add-on.`);
   }
   if (args.fresh) fs.rmSync(path.join(out, "answers.jsonl"), { force: true });
   startDevelopSession(out, { name: args.name || path.basename(dir), dir, brief: args.brief || "" });
@@ -120,6 +126,7 @@ async function docs() {
   const session = readMerged(out);
   if (!session?.mode) throw new Error("Set mode before fetching. Mode comes first, and this command is the network.");
   setStep(out, "docs", "running", "Fetching Adobe docs", { doing: "Fetching Adobe docs" });
+  const writeCache = process.env.EXPRESS_DEVELOP_WRITE_CACHE === "1";
   const result = await fetchDevDocs({
     budgetMs: Number(args.budget) || 20000,
     pageMs: Number(args["page-timeout"]) || 8000,
@@ -127,19 +134,19 @@ async function docs() {
     destDir: path.join(out, "docs")
   });
   saveDocs(out, result);
-  const summaryPath = path.join(liveDir, "summary.json");
-  let previous = {};
-  try {
-    previous = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
-  } catch {
-    previous = {};
-  }
-  const summary = {
-    ...previous,
-    fetchedAt: result.fetchedAt,
-    develop: { counts: result.counts, elapsedMs: result.elapsedMs, budgetMs: result.budgetMs, pages: result.pages }
-  };
-  if (process.env.EXPRESS_DEVELOP_KEEP_CACHE !== "1") {
+  if (writeCache) {
+    const summaryPath = path.join(liveDir, "summary.json");
+    let previous = {};
+    try {
+      previous = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+    } catch {
+      previous = {};
+    }
+    const summary = {
+      ...previous,
+      fetchedAt: result.fetchedAt,
+      develop: { counts: result.counts, elapsedMs: result.elapsedMs, budgetMs: result.budgetMs, pages: result.pages }
+    };
     fs.mkdirSync(liveDir, { recursive: true });
     fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   }
@@ -183,17 +190,38 @@ function implement() {
   const dir = session.addon.path;
   if (!dir) throw new Error("The session has no add-on folder.");
   const already = fs.existsSync(path.join(dir, "src", "manifest.json")) || fs.existsSync(path.join(dir, "manifest.json"));
-  if (decision.origin === "new" && !already) scaffoldProject({ dir, template: decision.template });
-  const applied = applyFeature({
-    dir,
-    feature: decision.feature,
-    design: decision.design,
-    evidence: session.feasibility?.evidence || "",
-    page: session.feasibility?.page || "",
-    brief: session.brief
-  });
-  patchDevelop(out, { implemented: true, addonPath: dir, written: applied.written, files: applied.files });
-  print({ ok: true, ...applied, dir }, out);
+  if (decision.origin === "new" && !already) {
+    try {
+      scaffoldProject({ dir, template: decision.template });
+    } catch (error) {
+      if (/is not an empty folder/.test(error.message)) patchDevelop(out, { blockedEmpty: true });
+      throw error;
+    }
+  }
+  applyManifestName(dir, session.addon?.name);
+  const pages = (session.docs?.pages || [])
+    .filter((page) => /architecture|document-api|implementation-guide/.test(page.id || ""))
+    .map((page) => ({ id: page.id, label: page.label, url: page.url }));
+  const handoff = implementationHandoff({ brief: session.brief, pages, design: decision.design });
+  if (!session.develop?.implemented) patchDevelop(out, { handoff, implemented: false, addonPath: dir });
+  else patchDevelop(out, { handoff, addonPath: dir });
+  print({ ok: true, action: "awaiting-agent-implementation", ...handoff, dir }, out);
+}
+
+function record() {
+  const out = resolveOut();
+  const session = readMerged(out);
+  const dir = session.addon?.path;
+  if (!dir) throw new Error("The session has no add-on folder.");
+  const result = verifyFeature({ dir, brief: session.brief });
+  if (!result.ok) {
+    patchDevelop(out, { implemented: false, verify: result });
+    throw new Error(`The feature is not done. ${result.problems.join(" ")}`);
+  }
+  const files = sourceList(dir);
+  patchDevelop(out, { implemented: true, verify: { ok: true, needs: result.needs }, files, addonPath: dir });
+  setStep(out, "implement", "done", "Feature verified against the brief");
+  print({ ok: true, verified: true, needs: result.needs, files, dir }, out);
 }
 
 function build() {
@@ -230,7 +258,7 @@ async function audit() {
       screens: 0,
       note: "The box runner does not start Chrome or Edge. The panel was not walked and nothing was captured."
     });
-    patchDevelop(out, { audited: true, auditOk: false, auditBugs: [], standIn: record.standIn, expressPass: false, rendered: false });
+    patchDevelop(out, { audited: true, auditSkipped: true, auditBugs: [], standIn: record.standIn, expressPass: false, rendered: false });
     fs.writeFileSync(path.join(out, "browser-run.json"), `${JSON.stringify(record, null, 2)}\n`);
     setStep(out, "audit", "done", "Browser walk skipped");
     print({ ok: true, skipped: true, ...record }, out);
@@ -271,6 +299,8 @@ async function audit() {
   fs.renameSync(staging, reviewOut);
   const bugs = auditJson.bugs || [];
   const screens = auditJson.screens || 0;
+  const captures = copyPanelCaptures(out, reviewOut);
+  const failed = bugs.length > 0 || auditJson.ok === false;
   const record = browserRun({
     standIn: served.label,
     screens,
@@ -280,17 +310,19 @@ async function audit() {
   });
   patchDevelop(out, {
     audited: true,
-    auditOk: bugs.length === 0 && auditJson.ok !== false,
+    auditOk: !failed,
     auditBugs: bugs,
+    auditScreens: screens,
+    panelCaptures: captures,
     standIn: served.label,
     expressPass: false,
     rendered: false,
     reviewOut
   });
   fs.writeFileSync(path.join(out, "browser-run.json"), `${JSON.stringify(record, null, 2)}\n`);
-  setStep(out, "audit", "done", screens ? `Walked ${screens} screens with the stand-in` : "Audit finished");
+  setStep(out, "audit", "done", failed ? `Audit failed: ${bugs.length} error${bugs.length === 1 ? "" : "s"}` : screens ? `Walked ${screens} screens with the stand-in` : "Audit finished");
   print({
-    ok: bugs.length === 0 && auditJson.ok !== false,
+    ok: !failed,
     bugs,
     screens,
     warnings: auditJson.warnings || 0,
@@ -320,21 +352,28 @@ function listingShots() {
     ? "The box runner does not start Chrome or Edge."
     : "";
   if (reason) {
-    patchDevelop(out, { listingShots: "skipped", listingShotsReason: reason });
+    patchDevelop(out, { listingShots: "failed", listingShotsReason: reason });
     print({
-      ok: true,
+      ok: false,
       skipped: true,
+      done: false,
       rendered: false,
       capturedOn: "not captured",
       expressPass: false,
       reason,
-      note: "No screenshot was written, and none was claimed."
+      note: "No screenshot was written, and none was claimed. The listing step is not done."
     }, out);
     return;
   }
   const listingDir = path.join(out, "listing");
   const prepared = spawnSync(process.execPath, [path.join(reviewScripts, "prepare-listing.mjs"), "--out", listingDir], { encoding: "utf8" });
   if (prepared.status !== 0) throw new Error(prepared.stderr || prepared.stdout || "prepare-listing failed.");
+  const filled = fillListingDir(listingDir, session.addon.path);
+  if (!filled.ok) {
+    patchDevelop(out, { listingShots: "failed", listingShotsReason: filled.error });
+    print({ ok: false, skipped: true, done: false, rendered: false, capturedOn: "not captured", expressPass: false, reason: filled.error }, out);
+    return;
+  }
   const rendered = spawnSync(process.execPath, [path.join(reviewScripts, "render-listing.mjs"), "--dir", listingDir, "--input", session.addon.path], {
     encoding: "utf8",
     timeout: 90000
@@ -342,9 +381,9 @@ function listingShots() {
   if (rendered.error?.code === "ETIMEDOUT" || rendered.status !== 0) {
     const why = rendered.error?.code === "ETIMEDOUT"
       ? "Chrome did not finish the listing screenshots, so it cannot run here."
-      : (rendered.stderr || rendered.stdout || "Listing screenshots were not rendered.").slice(-500);
-    patchDevelop(out, { listingShots: "skipped", listingShotsReason: why });
-    print({ ok: true, skipped: true, rendered: false, capturedOn: "not captured", expressPass: false, reason: why }, out);
+      : (rendered.stderr || rendered.stdout || "Listing screenshots were not rendered.").trim().slice(-2000);
+    patchDevelop(out, { listingShots: "failed", listingShotsReason: why });
+    print({ ok: false, skipped: true, done: false, rendered: false, capturedOn: "not captured", expressPass: false, reason: why }, out);
     return;
   }
   const finalDir = path.join(listingDir, "final");
@@ -354,12 +393,18 @@ function listingShots() {
       written.push(addShot(out, { file: path.join(finalDir, name), label: name, kind: "listing" }).shot.file);
     }
   }
-  patchDevelop(out, { listingShots: written.length ? "written" : "skipped", listingShotFiles: written });
+  if (!written.length) {
+    patchDevelop(out, { listingShots: "failed", listingShotsReason: "The renderer wrote no PNG.", listingShotFiles: [] });
+    print({ ok: false, done: false, rendered: false, files: [], capturedOn: "not captured", expressPass: false, reason: "The renderer wrote no PNG." }, out);
+    return;
+  }
+  patchDevelop(out, { listingShots: "written", listingShotFiles: written });
   print({
-    ok: written.length > 0,
+    ok: true,
+    done: true,
     files: written,
-    rendered: false,
-    capturedOn: written.length ? "this computer" : "not captured",
+    rendered: true,
+    capturedOn: "this computer",
     expressPass: false
   }, out);
 }
@@ -376,11 +421,19 @@ function listingText() {
   } catch {
     description = "";
   }
+  const boilerplate = /adobe creative cloud web add-on\.?$/i;
+  const usable = description && !boilerplate.test(description.trim()) ? description.trim() : "";
+  const brief = String(session.brief || "").trim();
+  const name = manifest.name || session.addon.name;
+  const summary = brief || usable || name;
+  const words = summary.toLowerCase().match(/\b[a-z][a-z0-9-]{2,}\b/g) || [];
+  const skip = new Set(["the", "and", "for", "with", "add", "from", "that", "this", "into", "your"]);
+  const keywords = [...new Set(words.filter((word) => !skip.has(word)))].slice(0, 6);
   const listing = {
-    name: manifest.name || session.addon.name,
-    summary: description || session.brief || manifest.name,
-    description: description || session.brief || "",
-    keywords: []
+    name,
+    summary,
+    description: brief ? `${name}. ${brief}` : (usable || name),
+    keywords
   };
   setListing(out, listing);
   print({ ok: true, listing }, out);
@@ -416,8 +469,52 @@ function dashboardUp(out) {
   }
 }
 
+function slugFrom(name) {
+  return String(name || "addon").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "addon";
+}
+
+function sourceList(dir) {
+  const found = [];
+  const walk = (folder) => {
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(html?|jsx?|tsx?|mjs|json)$/i.test(entry.name)) found.push(path.relative(dir, full));
+    }
+  };
+  try {
+    walk(dir);
+  } catch {
+    return [];
+  }
+  return found;
+}
+
+function copyPanelCaptures(out, reviewOut) {
+  let shots = [];
+  try {
+    shots = JSON.parse(fs.readFileSync(path.join(reviewOut, "session.json"), "utf8")).shots || [];
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const shot of shots) {
+    if (shot.kind && shot.kind !== "panel") continue;
+    const file = path.resolve(reviewOut, shot.file || "");
+    if (!file || !fs.existsSync(file)) continue;
+    try {
+      addShot(out, { file, label: shot.label || "Panel", kind: "panel", theme: shot.theme || "" });
+      count += 1;
+    } catch {
+      // A shot that is not an image is not a capture.
+    }
+  }
+  return count;
+}
+
 function usage() {
-  process.stdout.write("Usage: develop.mjs begin|docs|templates|classify|implement|build|package|audit|listing-text|listing-shots\n");
+  process.stdout.write("Usage: develop.mjs begin|docs|templates|classify|implement|record|build|package|audit|listing-text|listing-shots\n");
   process.exit(1);
 }
 

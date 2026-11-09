@@ -177,8 +177,8 @@ test("re-running begin resumes, and a second start does not wipe answers", () =>
   const { home, env } = homeEnv();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "develop-addon-"));
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "develop-out-"));
+  assert.equal(runAt(["scripts/develop.mjs", "begin", "--dir", dir, "--empty", "--name", "Keep", "--brief", "caption", "--out", out], env).status, 0);
   fs.writeFileSync(path.join(dir, "keep.txt"), "keep");
-  assert.equal(runAt(["scripts/develop.mjs", "begin", "--dir", dir, "--name", "Keep", "--brief", "caption", "--out", out], env).status, 0);
   assert.equal(runAt(["scripts/session.mjs", "mode", "--set", "dashboard"], env).status, 0);
   const started = jsonOf(runAt(["scripts/dashboard.mjs", "start", "--no-open"], env));
   assert.equal(started.ok, true, JSON.stringify(started));
@@ -218,7 +218,7 @@ test("re-running begin resumes, and a second start does not wipe answers", () =>
   assert.equal(after, before);
 });
 
-test("a second session stops the previous dashboard", () => {
+test("a second session does not stop the previous dashboard", () => {
   const { home, env } = homeEnv();
   const firstDir = fs.mkdtempSync(path.join(os.tmpdir(), "develop-a-"));
   const secondDir = fs.mkdtempSync(path.join(os.tmpdir(), "develop-b-"));
@@ -237,14 +237,15 @@ test("a second session stops the previous dashboard", () => {
   } catch {
     alive = false;
   }
-  assert.equal(alive, false);
-  assert.equal(fs.existsSync(path.join(firstOut, "server.json")), false);
+  assert.equal(alive, true);
+  assert.equal(fs.existsSync(path.join(firstOut, "server.json")), true);
   const pointer = JSON.parse(fs.readFileSync(path.join(home, ".express-addon-develop", "current.json"), "utf8"));
   assert.equal(pointer.out, secondOut);
   const status = jsonOf(runAt(["scripts/dashboard.mjs", "status", "--out", firstOut], env));
-  assert.equal(status.running, false);
+  assert.equal(status.running, true);
   const next = jsonOf(runAt(["scripts/dashboard.mjs", "start", "--no-open", "--out", secondOut], env));
   assert.equal(next.ok, true);
+  assert.equal(runAt(["scripts/dashboard.mjs", "stop", "--out", firstOut], env).status, 0);
   assert.equal(runAt(["scripts/dashboard.mjs", "stop", "--out", secondOut], env).status, 0);
 });
 
@@ -309,6 +310,15 @@ test("the printed next lines reach the handoff", { timeout: 300000 }, () => {
       assert.equal(waited.status, "answered");
       continue;
     }
+    if (action.action === "awaiting-agent-implementation") {
+      const sessionNow = JSON.parse(fs.readFileSync(path.join(out, "session.json"), "utf8"));
+      const htmlNow = path.join(sessionNow.addon.path, "src/index.html");
+      const source = fs.readFileSync(htmlNow, "utf8");
+      if (!source.includes("caption-field")) {
+        const block = `<label for="caption-field">Caption</label>\n<input id="caption-field" name="caption" type="text" />\n`;
+        fs.writeFileSync(htmlNow, source.includes("</body>") ? source.replace("</body>", `${block}</body>`) : `${source}\n${block}`);
+      }
+    }
     assert.ok(action.command, JSON.stringify(action));
     const ran = runPrinted(action.command, env);
     assert.equal(ran.status, 0, `${action.command}\n${ran.stdout}\n${ran.stderr}`);
@@ -325,7 +335,8 @@ test("the printed next lines reach the handoff", { timeout: 300000 }, () => {
   assert.notEqual(session.summary, null);
   const htmlPath = path.join(session.addon.path, "src", "index.html");
   const html = fs.readFileSync(htmlPath, "utf8");
-  assert.match(html, /develop-feature/);
+  assert.match(html, /caption-field/);
+  assert.doesNotMatch(html, /develop-feature|function featureReady/);
   fs.appendFileSync(htmlPath, "\n<!-- KEEP -->\n");
   const again = runAt(["scripts/develop.mjs", "implement"], env);
   assert.equal(again.status, 0, again.stdout + again.stderr);

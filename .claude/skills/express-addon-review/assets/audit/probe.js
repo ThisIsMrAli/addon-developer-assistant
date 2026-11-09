@@ -40,6 +40,18 @@
     return r.width >= 1 && r.height >= 1;
   };
   const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
+  function readableText() {
+    const bits = [];
+    const visit = (node) => {
+      if (!node) return;
+      if (node.nodeType === 3) bits.push(node.textContent || "");
+      const children = node.childNodes ? [...node.childNodes] : [];
+      for (const child of children) visit(child);
+      if (node.shadowRoot) visit(node.shadowRoot);
+    };
+    visit(document.body);
+    return clean(bits.join(" "));
+  }
   function labelOf(el) {
     const named = clean(el.getAttribute?.("aria-label") || el.getAttribute?.("title"));
     if (named) return named.slice(0, 60);
@@ -394,7 +406,7 @@
       }
       keep([{ kind: "scrolls-sideways", severity: "error", message: `The panel scrolls sideways: its content is ${document.documentElement.scrollWidth}px wide in a ${innerWidth}px panel${worst ? `, widest at "${labelOf(worst) || worst.tagName.toLowerCase()}"` : ""}.`, fix: "Find the element that is wider than 100% and let it shrink or wrap.", el: worst, rect: worst ? box(worst) : undefined }], 0);
     }
-    const text = clean(document.body?.innerText);
+    const text = readableText();
     if (!modal && !text && !all.some((el) => ["IMG", "SVG", "CANVAS", "VIDEO"].includes(el.tagName.toUpperCase()) && visible(el)) && !all.some((el) => isControl(el) && visible(el))) {
       keep([{ kind: "panel-blank", severity: "error", message: "The panel shows nothing: no text, no controls, no image.", fix: "Check the console for a script error, and make sure the preview host is available." }], 0);
     }

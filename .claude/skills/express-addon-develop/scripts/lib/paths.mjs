@@ -25,13 +25,6 @@ function pointerFile() {
 
 export function rememberOut(out) {
   const next = path.resolve(out);
-  let previous = "";
-  try {
-    previous = JSON.parse(fs.readFileSync(pointerFile(), "utf8")).out || "";
-  } catch {
-    previous = "";
-  }
-  if (previous && path.resolve(previous) !== next) stopDashboard(previous);
   fs.mkdirSync(homeDir(), { recursive: true });
   fs.writeFileSync(pointerFile(), `${JSON.stringify({ out: next, at: new Date().toISOString() })}\n`);
 }
@@ -45,20 +38,3 @@ export function rememberedOut() {
   }
 }
 
-/** One pointer, one dashboard. The previous session's server is stopped before the pointer moves. */
-function stopDashboard(out) {
-  const file = path.join(out, "server.json");
-  try {
-    const info = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (info.pid) {
-      try {
-        process.kill(info.pid, "SIGTERM");
-      } catch {
-        // Already gone.
-      }
-    }
-  } catch {
-    // No server record.
-  }
-  fs.rmSync(file, { force: true });
-}

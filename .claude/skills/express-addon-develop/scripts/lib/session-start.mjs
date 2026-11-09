@@ -71,7 +71,13 @@ export function saveDocs(out, docs) {
 }
 
 export function saveTemplates(out, templates) {
-  upsertQuestion(out, templateAsk(templates.ids));
+  let brief = "";
+  try {
+    brief = JSON.parse(fs.readFileSync(path.join(out, "session.json"), "utf8")).brief || "";
+  } catch {
+    brief = "";
+  }
+  upsertQuestion(out, templateAsk(templates.ids, brief));
   return mutate(out, (draft) => {
     draft.templates = templates;
   });
