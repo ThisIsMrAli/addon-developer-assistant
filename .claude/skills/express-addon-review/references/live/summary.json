@@ -1,0 +1,579 @@
+{
+  "fetchedAt": "2026-11-09T09:37:10.959Z",
+  "repo": "AdobeDocs/express-add-ons-docs",
+  "branch": "main",
+  "sha": "3f85ea24f55e6caba8711bee25a65de626fdc335",
+  "pages": [
+    {
+      "id": "src/pages/guides/build/advanced-topics/coi.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/advanced-topics/coi.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/advanced-topics/frameworks-libraries-bundling.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/advanced-topics/frameworks-libraries-bundling.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/advanced-topics/performance.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/advanced-topics/performance.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/best-practices.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/best-practices.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/fonts.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/fonts.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/implementation-guide.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/implementation-guide.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/branding-guidelines.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/branding-guidelines.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/changelog.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/changelog.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/design-principles.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/design-principles.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/feedback-and-messaging.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/feedback-and-messaging.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/introduction.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/introduction.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/mobile-ux.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/mobile-ux.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/resources-and-references.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/resources-and-references.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/theming.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/theming.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/design/ux-guidelines/visual-elements.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/ux-guidelines/visual-elements.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/brand-guidelines.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/brand-guidelines.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/genai/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/genai/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/genai/recommendations.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/genai/recommendations.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/genai/requirements.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/genai/requirements.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/accessibility.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/accessibility.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/auth.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/auth.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/compatibility.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/compatibility.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/content.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/content.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/edge-case.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/edge-case.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/features.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/features.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/listing.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/listing.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/performance.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/performance.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/planning.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/planning.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/security.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/security.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/usability.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/usability.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/general/user-interface.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/general/user-interface.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/guidelines/monetization.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/guidelines/monetization.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/listing-guide.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/listing-guide.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/private-dist.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/private-dist.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/public-dist.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/public-dist.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/rejections.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/rejections.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/review-process/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/review-process/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/build/distribute/review-process/submission-checklist.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/distribute/review-process/submission-checklist.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/addon-project-anatomy.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/addon-project-anatomy.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/changelog.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/changelog.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/code-playground-addon-mode.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/code-playground-addon-mode.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/code-playground-script-mode.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/code-playground-script-mode.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/code-playground-troubleshooting.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/code-playground-troubleshooting.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/code-playground-workflow.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/code-playground-workflow.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/code-playground.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/code-playground.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/developer-journey.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/developer-journey.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/hello-world.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/hello-world.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/local-development/browser.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/browser.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/local-development/dev-tooling.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/dev-tooling.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/local-development/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/local-development/known-issues-limitations.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/known-issues-limitations.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/local-development/mcp-server.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/mcp-server.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/getting-started/local-development/vs-code.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/vs-code.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/fundamentals/document-sandbox-constants.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/fundamentals/document-sandbox-constants.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/fundamentals/terminology.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/fundamentals/terminology.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/fundamentals/ui-sdk-constants.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/fundamentals/ui-sdk-constants.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/create-renditions.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/create-renditions.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/document-metadata.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/document-metadata.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/drag-and-drop.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/drag-and-drop.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/element-metadata.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/element-metadata.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/group-elements.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/group-elements.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/handle-selection.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/handle-selection.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/large-document-support.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/large-document-support.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/local-data-management.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/local-data-management.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/manage-pages.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/manage-pages.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/modal-dialogs.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/modal-dialogs.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/oauth2.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/oauth2.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/page-metadata.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/page-metadata.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/position-elements.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/position-elements.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/premium-content.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/premium-content.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/resize-elements.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/resize-elements.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/theme-locale.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/theme-locale.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/grids-addon.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/grids-addon.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/markdown-parser-text-api.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/markdown-parser-text-api.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/spectrum-workshop/index.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/spectrum-workshop/index.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/spectrum-workshop/part1.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/spectrum-workshop/part1.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/spectrum-workshop/part2.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/spectrum-workshop/part2.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/spectrum-workshop/part3.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/spectrum-workshop/part3.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/stats-addon.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/stats-addon.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/tutorials/using-lit-typescript.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/tutorials/using-lit-typescript.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-audio.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-audio.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-color.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-color.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-geometry.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-geometry.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-images.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-images.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-pdf-powerpoint.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-pdf-powerpoint.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-text.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-text.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/use-videos.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/use-videos.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/how-to/user-info.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/how-to/user-info.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/platform-concepts/architecture.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/architecture.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/platform-concepts/context.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/context.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/platform-concepts/deprecation-policy.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/deprecation-policy.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/platform-concepts/document-api.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/document-api.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/platform-concepts/large-document-support.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/large-document-support.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/learn/samples.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/samples.md",
+      "ok": true
+    },
+    {
+      "id": "src/pages/guides/support/faq.md",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/support/faq.md",
+      "ok": true
+    },
+    {
+      "id": "static/pdf/Adobe_Express_Developer_Program_brand_guide_100625.txt",
+      "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/static/pdf/Adobe_Express_Developer_Program_brand_guide_100625.pdf",
+      "ok": true
+    },
+    {
+      "id": "extra/manifest.txt",
+      "url": "https://developer.adobe.com/express/add-ons/docs/references/manifest/",
+      "ok": true
+    },
+    {
+      "id": "extra/premium-content.txt",
+      "url": "https://developer.adobe.com/express/add-ons/docs/guides/learn/how-to/premium-content",
+      "ok": true
+    },
+    {
+      "id": "extra/rejections-blog.txt",
+      "url": "https://blog.developer.adobe.com/en/publish/2026/05/how-to-get-your-adobe-express-add-on-approved-avoiding-the-most-common-rejections",
+      "ok": true
+    }
+  ],
+  "develop": {
+    "counts": {
+      "fresh": 6,
+      "stale": 0,
+      "failed": 0
+    },
+    "elapsedMs": 57,
+    "budgetMs": 20000,
+    "pages": [
+      {
+        "id": "src/pages/guides/learn/platform-concepts/architecture.md",
+        "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/architecture.md",
+        "label": "fresh"
+      },
+      {
+        "id": "src/pages/guides/learn/platform-concepts/document-api.md",
+        "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/document-api.md",
+        "label": "fresh"
+      },
+      {
+        "id": "src/pages/guides/learn/platform-concepts/context.md",
+        "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/learn/platform-concepts/context.md",
+        "label": "fresh"
+      },
+      {
+        "id": "src/pages/guides/build/design/implementation-guide.md",
+        "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/build/design/implementation-guide.md",
+        "label": "fresh"
+      },
+      {
+        "id": "src/pages/guides/getting-started/local-development/dev-tooling.md",
+        "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/local-development/dev-tooling.md",
+        "label": "fresh"
+      },
+      {
+        "id": "src/pages/guides/getting-started/addon-project-anatomy.md",
+        "url": "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main/src/pages/guides/getting-started/addon-project-anatomy.md",
+        "label": "fresh"
+      }
+    ]
+  }
+}
