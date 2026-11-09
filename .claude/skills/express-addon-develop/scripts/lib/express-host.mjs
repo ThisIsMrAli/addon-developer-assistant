@@ -9,7 +9,7 @@ import https from "node:https";
 import path from "node:path";
 import { DEV_ORIGIN, assertSafeArgv } from "./devcert.mjs";
 import { devRequestOptions, loopbackPolicyReason, probeDevPort, readLoopbackPolicy, resolvePolicyDirs } from "./loopback.mjs";
-import { prepareDevCa, releaseSudoGuard, SSL_WARNING, sudoGuard } from "./ssl-setup.mjs";
+import { bindGuardToPid, prepareDevCa, releaseSudoGuard, SSL_WARNING, sudoGuard } from "./ssl-setup.mjs";
 
 export { DEV_ORIGIN };
 export const EXPRESS_URL = "https://new.express.adobe.com";
@@ -317,6 +317,7 @@ export async function openDevServer({
 }
 
 function holdSudoGuard(child, guard) {
+  if (child && typeof child.kill === "function" && Number.isInteger(child.pid) && child.pid > 0) bindGuardToPid(guard, child.pid);
   const listen = child && (typeof child.once === "function" ? child.once.bind(child) : typeof child.on === "function" ? child.on.bind(child) : null);
   if (listen) listen("exit", () => releaseSudoGuard(guard));
 }

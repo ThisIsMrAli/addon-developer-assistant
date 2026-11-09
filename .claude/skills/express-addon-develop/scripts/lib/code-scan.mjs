@@ -288,6 +288,16 @@ export function controlFlow(files) {
       if ((isFunction(node) || node.type === "ClassMethod" || node.type === "ObjectMethod") && !idOf.has(node)) identify(node, "");
     });
   }
+  for (const ast of programs) {
+    walk(ast, (node) => {
+      if (node.type !== "VariableDeclarator" || node.id?.type !== "Identifier" || node.init?.type !== "Identifier") return;
+      const ids = byName.get(node.init.name);
+      if (!ids) return;
+      const list = byName.get(node.id.name) || [];
+      for (const id of ids) if (!list.includes(id)) list.push(id);
+      byName.set(node.id.name, list);
+    });
+  }
   const invocations = new Map();
   const invoke = (id, inTry, callerId) => {
     if (!id) return;
@@ -303,9 +313,20 @@ export function controlFlow(files) {
       const params = paramNames(node);
       const slots = new Set();
       walk(node.body, (inner, innerStack) => {
-        if (inner.type !== "CallExpression" || inner.callee?.type !== "Identifier") return;
-        const index = params.indexOf(inner.callee.name);
-        if (index >= 0 && innerStack.some((item) => item.type === "TryStatement")) slots.add(index);
+        if (inner.type !== "CallExpression") return;
+        const inTry = innerStack.some((item) => item.type === "TryStatement");
+        if (!inTry) return;
+        if (inner.callee?.type === "Identifier") {
+          const index = params.indexOf(inner.callee.name);
+          if (index >= 0) slots.add(index);
+        }
+        if (inner.callee?.type === "MemberExpression" && ARRAY_METHODS.has(calleeName(inner.callee))) {
+          const arg = inner.arguments?.[0];
+          if (arg?.type === "Identifier") {
+            const index = params.indexOf(arg.name);
+            if (index >= 0) slots.add(index);
+          }
+        }
       });
       if (slots.size) callbackSlots.set(id, slots);
     });
@@ -318,11 +339,17 @@ export function controlFlow(files) {
       const name = calleeName(node.callee);
       const ids = name && byName.has(name) ? byName.get(name) : [];
       for (const id of ids) invoke(id, here, callerId);
+      const arrayMethod = node.callee?.type === "MemberExpression" && ARRAY_METHODS.has(name);
+      const thenCaught = name === "then" && stack.some((item) => item.type === "CallExpression" && calleeName(item.callee) === "catch");
       node.arguments?.forEach((arg, index) => {
         const wrapped = ids.some((id) => callbackSlots.get(id)?.has(index));
-        if (isFunction(arg)) invoke(idOf.get(arg), wrapped, callerId);
-        if (wrapped && arg?.type === "Identifier" && byName.has(arg.name)) {
-          for (const id of byName.get(arg.name)) invoke(id, true, callerId);
+        const arrayCb = arrayMethod && index === 0;
+        const linked = wrapped || arrayCb || thenCaught;
+        if (isFunction(arg) && linked) invoke(idOf.get(arg), wrapped || thenCaught || here, callerId);
+        const target = boundName(arg);
+        if (linked && target && byName.has(target)) {
+          const coveredHere = wrapped || thenCaught || (arrayCb && here);
+          for (const id of byName.get(target)) invoke(id, coveredHere, callerId);
         }
       });
     });
@@ -347,6 +374,18 @@ export function controlFlow(files) {
   return { unhandledThrow, unhandledAuthorize };
 }
 
+const ARRAY_METHODS = new Set(["map", "forEach", "filter", "find", "findIndex", "some", "every", "flatMap", "reduce", "reduceRight"]);
+
+function boundName(arg) {
+  if (arg?.type === "Identifier") return arg.name;
+  if (arg?.type === "CallExpression" && calleeName(arg.callee) === "bind") {
+    const object = arg.callee.object;
+    if (object?.type === "Identifier") return object.name;
+    if (object?.type === "MemberExpression" && !object.computed && object.property?.type === "Identifier") return object.property.name;
+  }
+  return "";
+}
+
 function isCallable(node) {
   return isFunction(node) || node?.type === "ClassMethod" || node?.type === "ObjectMethod" || node?.type === "ClassPrivateMethod";
 }
@@ -360,7 +399,79 @@ function enclosingFn(stack, idOf) {
 
 const IMAGE_CALL = /(^|\.)(addImage|createImage|createImageContainer|loadBitmapImage)$/;
 
-/** An image call is placed when its function uses the shared free-space layout, not the page center alone. */
+function isSandboxProxyCall(callee) {
+  if (callee?.type !== "MemberExpression") return false;
+  const chain = memberChain(callee.object) || [];
+  return chain.some((part) => part === "proxy" || /sandboxproxy/i.test(part));
+}
+
+/** Half of the page width, or a loop that steps across it. `page.width / 2 +` and `page.width * 0.5 +` are the same offset. */
+export function hasColumnPlacement(text) {
+  const parsed = parseSource("layout.js", String(text || ""));
+  if (!parsed.ast) return false;
+  let ok = false;
+  walk(parsed.ast, (node) => {
+    if (node.type === "BinaryExpression" && node.operator === "+" && (isHalfWidth(node.left) || isHalfWidth(node.right))) ok = true;
+    if (forLoopSpansPage(node)) ok = true;
+  });
+  return ok;
+}
+
+function isHalfWidth(node) {
+  if (!node || node.type !== "BinaryExpression") return false;
+  const width = (part) => part?.type === "MemberExpression" && !part.computed && part.property?.name === "width";
+  const half = (part) => part?.type === "NumericLiteral" && Math.abs(part.value - 0.5) < 1e-9;
+  if (node.operator === "/" && width(node.left) && node.right?.type === "NumericLiteral" && node.right.value === 2) return true;
+  if (node.operator === "*" && ((width(node.left) && half(node.right)) || (width(node.right) && half(node.left)))) return true;
+  return false;
+}
+
+function forLoopSpansPage(node) {
+  if (node?.type !== "ForStatement" || !node.test) return false;
+  const update = node.update;
+  const steps = update?.type === "UpdateExpression" || (update?.type === "AssignmentExpression" && update.operator === "+=");
+  if (!steps) return false;
+  let width = false;
+  walk(node.test, (inner) => {
+    if (inner.type === "MemberExpression" && !inner.computed && inner.property?.name === "width") width = true;
+  });
+  return width;
+}
+
+function insideKeptEdit(stack) {
+  for (let i = stack.length - 1; i >= 0; i -= 1) {
+    const fn = stack[i];
+    if (!isFunction(fn)) continue;
+    for (let j = i - 1; j >= 0; j -= 1) {
+      const call = stack[j];
+      if (call.type !== "CallExpression" || !call.arguments?.includes(fn)) continue;
+      const name = calleeName(call.callee);
+      if (name === "queueAsyncEdit") return true;
+      if (name === "keepContentActiveDuringAsync" && call.arguments[2] === fn) return true;
+    }
+  }
+  return false;
+}
+
+/** createImageContainer must run in the documented afterAsyncCallback, or in queueAsyncEdit. */
+export function imageKeepsContentActive(files) {
+  let saw = false;
+  let bad = false;
+  for (const file of files) {
+    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(file.rel || file.file || "")) continue;
+    const parsed = parseSource(file.rel || file.file, String(file.text || ""));
+    if (!parsed.ast) continue;
+    walk(parsed.ast, (node, stack) => {
+      if (node.type !== "CallExpression" || calleeName(node.callee) !== "createImageContainer") return;
+      if (isSandboxProxyCall(node.callee)) return;
+      saw = true;
+      if (!insideKeptEdit(stack)) bad = true;
+    });
+  }
+  return !saw || !bad;
+}
+
+/** An image call is placed when its function uses the shared free-space layout, not the page center alone. A sandbox proxy call is not the iframe image API. */
 export function imagePlacedWithContent(files) {
   let saw = false;
   let unplaced = false;
@@ -369,15 +480,16 @@ export function imagePlacedWithContent(files) {
     const text = String(file.text || "");
     const parsed = parseSource(file.rel || file.file, text);
     if (!parsed.ast) continue;
-    const layout = /boundsInParent/.test(text) && /page\.width\s*\/\s*2\s*\+/.test(text);
+    const layout = /boundsInParent/.test(text) && hasColumnPlacement(text);
     walk(parsed.ast, (node, stack) => {
       if (node.type !== "CallExpression") return;
+      if (isSandboxProxyCall(node.callee)) return;
       const called = calleeName(node.callee);
       if (!called || !IMAGE_CALL.test(called)) return;
       saw = true;
       const owner = [...stack].reverse().find((item) => isCallable(item));
       const body = owner && Number.isInteger(owner.start) && Number.isInteger(owner.end) ? text.slice(owner.start, owner.end) : text;
-      const shares = /boundsInParent/.test(body) || /placeOnPage\s*\(/.test(body);
+      const shares = /boundsInParent/.test(body) || /placeOnPage\s*\(|placeImageNode\s*\(|placeHeading\s*\(/.test(body);
       if (!shares || !layout) unplaced = true;
     });
   }

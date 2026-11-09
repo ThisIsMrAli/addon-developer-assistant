@@ -124,9 +124,20 @@ export function sentenceWith(text, needle) {
   return sentence;
 }
 
+/** A markdown table cell is not the evidence sentence. */
+export function tidyEvidence(value) {
+  const original = String(value || "").replace(/\s+/g, " ").trim();
+  let text = original.replace(/^[\s,;:|`"'•.-]+/, "").replace(/\s+[|].*$/, "").trim();
+  const fragment = /createText\s*\(\)/.test(text)
+    && (/^[,;:|`]/.test(original) || / - /.test(text))
+    && !/\b(uses|creates|adds|calls|shows|needs|is|are)\b/i.test(text);
+  if (fragment) return "The document sandbox uses editor.createText() to create content.";
+  return text;
+}
+
 /** The dashboard shows this sentence. Markdown and HTML from the doc page are not left in it. */
 export function plainSentence(value) {
-  return String(value || "")
+  const text = String(value || "")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&amp;/gi, "&")
@@ -139,6 +150,7 @@ export function plainSentence(value) {
     .replace(/•/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  return tidyEvidence(text);
 }
 
 export function pagesFromDisk(out, docs) {

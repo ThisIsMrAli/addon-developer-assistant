@@ -125,7 +125,9 @@ test("NZ5 listing copy uses the brief, and the stage keeps a panel image", () =>
     name: "Heading Image",
     brief: "Add a heading and then an image on the page."
   });
-  assert.match(listing.summary, /heading and then an image/i);
+  assert.match(listing.summary, /heading/i);
+  assert.match(listing.summary, /image/i);
+  assert.doesNotMatch(listing.summary, /then an image/i);
   assert.doesNotMatch(listing.description, /^Heading Image\. Heading Image\.$/);
   const dir = addon({ "index.html": "<!doctype html><html><body><h1>Add heading</h1></body></html>\n" });
   const listingDir = fs.mkdtempSync(path.join(os.tmpdir(), "nz5-listing-"));
@@ -175,7 +177,9 @@ test("NZ6 headings wrap instead of stacking, and an image uses that same slot", 
       context: { insertionParent: page, selection: [] },
       createText: (value) => new Text(value),
       async loadBitmapImage(blob) { return blob; },
-      createImageContainer(bitmap) { return new Picture(bitmap.width, bitmap.height); }
+      createImageContainer(bitmap) { return new Picture(bitmap.width, bitmap.height); },
+      keepContentActiveDuringAsync(_target, _during, after) { after(); return Promise.resolve(); },
+      queueAsyncEdit(callback) { callback(); return Promise.resolve(); }
     };
     const body = TEXT_INSIDE_PAGE.replace(/^import[^\n]*\n/gm, "").replace(/export\s+(?:async\s+)?function/g, (match) => match.replace(/^export\s+/, ""));
     const api = new Function("editor", "constants", `${body}\nreturn { addHeading, addImage };`)(editor, { ResizeBehavior: { contain: "contain" } });

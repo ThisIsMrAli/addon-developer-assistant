@@ -3,9 +3,12 @@
  * and drop image tags whose files are not there. The stylesheet and the layout stay locked.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
+import { pathToFileURL } from "node:url";
 import { addonCorpus } from "../../../express-addon-review/scripts/lib/listing.mjs";
+import { findChrome, shoot } from "../../../express-addon-review/scripts/lib/chrome.mjs";
 import { panelMarkup } from "./code-scan.mjs";
 
 const BOILERPLATE = /^(get started|create rectangle|hello world|welcome|click me|javascript|swc-javascript|adobe creative cloud web add-on\.?)$/i;
@@ -62,19 +65,45 @@ export function phrasesFromAddon(dir) {
   return [...htmlPhrases, ...metaPhrases];
 }
 
+const KEYWORD_SKIP = new Set(["the", "and", "for", "with", "add", "from", "that", "this", "into", "your", "both", "only", "via", "not", "now", "was", "are", "two", "user", "sign", "then", "onto", "page", "panel", "button", "field", "using", "use", "its", "has", "have", "when", "will", "can", "you", "our", "new", "all", "spectrum"]);
+const API_WORD = /^(sp-|createrenditions|clientstorage|addimage|createtext|createrectangle|sandbox|iframe|oauth|runtime|textfield|spbutton)/i;
+
+function featurePhrases(brief) {
+  const text = String(brief || "");
+  const wants = [];
+  if (/\bheadings?\b|\bheadline\b/i.test(text)) wants.push("a heading");
+  if (/\bimages?\b|\bphotos?\b|\bpictures?\b/i.test(text)) wants.push("an image");
+  if (/\bcaptions?\b/i.test(text)) wants.push("a caption");
+  if (/\bnotes?\b/i.test(text)) wants.push("a note");
+  if (/\brenditions?\b|\bexports?\b/i.test(text)) wants.push("an export");
+  return wants;
+}
+
+function joinList(items) {
+  if (items.length <= 1) return items[0] || "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+}
+
+function writtenSummary(name, brief) {
+  const wants = featurePhrases(brief);
+  if (wants.length) return `Adds ${joinList(wants)} to the page.`;
+  const clean = String(name || "This add-on").trim();
+  return `${clean} works on the current page.`;
+}
+
 export function listingFrom({ name, brief = "", description = "", dir = "" }) {
   const phrases = dir ? phrasesFromAddon(dir) : [];
   const specific = phrases.filter((phrase) => !BOILERPLATE.test(phrase) && phrase.toLowerCase() !== String(name || "").trim().toLowerCase());
-  const briefText = String(brief || "").replace(/\s+/g, " ").trim();
-  const briefLead = briefText.split(/(?<=[.!?])\s+/).map((part) => part.trim()).find((part) => part.length >= 12 && part.toLowerCase() !== String(name || "").trim().toLowerCase()) || "";
   const usable = description && !/adobe creative cloud web add-on\.?$/i.test(String(description).trim()) ? String(description).trim() : "";
-  const lead = specific[0] || briefLead || usable || String(name || "").trim();
-  const summary = lead;
-  const fromBrief = briefLead && !specific.length ? (briefLead.endsWith(".") ? `${name}. ${briefLead}` : `${name}. ${briefLead}.`) : "";
-  const sentence = fromBrief || (specific.length > 1 ? `${name}. ${specific[0]}. ${specific[1]}.` : `${name}. ${lead}.`);
-  const skip = new Set(["the", "and", "for", "with", "add", "from", "that", "this", "into", "your", "both", "only", "via", "not", "now", "was", "are"]);
-  const words = `${specific.join(" ")} ${briefLead} ${name}`.toLowerCase().match(/\b[a-z][a-z0-9-]{2,}\b/g) || [];
-  const keywords = [...new Set(words.filter((word) => !skip.has(word)))].slice(0, 6);
+  const summary = specific[0] || writtenSummary(name, brief || usable);
+  const sentence = specific.length > 1
+    ? `${name}. ${specific[0]}. ${specific[1]}.`
+    : specific.length === 1
+      ? `${name}. ${specific[0]}.`
+      : `${name}. ${writtenSummary(name, brief || usable)}`;
+  const words = `${featurePhrases(brief).join(" ")} ${specific.join(" ")} ${name}`.toLowerCase().match(/\b[a-z][a-z0-9-]{2,}\b/g) || [];
+  const keywords = [...new Set(words.filter((word) => !KEYWORD_SKIP.has(word) && !API_WORD.test(word)))].slice(0, 6);
   return { name, summary, description: sentence.replace(/\s+/g, " ").trim(), keywords, brief: String(brief || "") };
 }
 
@@ -83,7 +112,7 @@ export function fillListingDir(listingDir, addonDir) {
   if (!phrases.length) return { ok: false, error: "The add-on has no phrase the listing can quote. The template's Get Started text is not a feature." };
   const files = fs.readdirSync(listingDir).filter((name) => name.endsWith(".html"));
   if (!files.length) return { ok: false, error: "prepare-listing did not write any pages." };
-  writePanelShots(listingDir, phrases[0]);
+  writePanelShots(listingDir, phrases);
   for (const name of files) fillPage(path.join(listingDir, name), phrases);
   const written = files.map((name) => fs.readFileSync(path.join(listingDir, name), "utf8")).join("\n");
   if (/Get Started/i.test(written)) return { ok: false, error: "The listing still shows the template's Get Started text. The screenshots are not done." };
@@ -117,14 +146,64 @@ function fillPage(file, phrases) {
 
 const PANEL_SHOTS = ["panel-back.png", "panel-front.png", "panel-mid.png", "panel-third.png"];
 
-function writePanelShots(dir, label) {
-  const png = panelCard(label);
+function writePanelShots(dir, phrases) {
+  const png = capturePanel(phrases);
   for (const name of PANEL_SHOTS) fs.writeFileSync(path.join(dir, name), png);
 }
 
-function panelCard(label) {
-  const width = 160;
-  const height = 100;
+function capturePanel(phrases) {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "express-panel-shot-"));
+  try {
+    const html = path.join(scratch, "panel.html");
+    const out = path.join(scratch, "panel.png");
+    fs.writeFileSync(html, panelPreviewHtml(phrases));
+    const chrome = findChrome();
+    if (chrome) {
+      try {
+        shoot({ chrome, url: pathToFileURL(html).href, out, width: 360, height: 480, timeout: 8000 });
+        if (fs.existsSync(out) && fs.statSync(out).size > 500) return fs.readFileSync(out);
+      } catch {
+        // A drawn panel of the same controls is used when Chrome cannot take the picture.
+      }
+    }
+    return drawPanel(phrases);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function panelPreviewHtml(phrases) {
+  const labels = (phrases || []).map((phrase) => String(phrase || "").trim()).filter(Boolean).slice(0, 4);
+  const title = labels[0] || "Panel";
+  const buttons = (labels.length ? labels : ["Add heading"]).map((label) => `<button type="button">${escapeHtml(label)}</button>`).join("");
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #f4f1ea; color: #1c2430; font: 16px/1.4 "Segoe UI", sans-serif; }
+  .panel { width: 300px; margin: 24px; background: #fff; border: 1px solid #d7d2c8; border-radius: 16px; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  label { display: block; font-size: 12px; margin-bottom: 4px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #c5c0b6; border-radius: 8px; margin-bottom: 12px; }
+  button { display: inline-block; margin: 0 8px 8px 0; background: #3b63fb; color: #fff; border: 0; border-radius: 16px; padding: 8px 14px; font: inherit; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <h1>${escapeHtml(title)}</h1>
+    <label for="heading">Heading</label>
+    <input id="heading" value="">
+    ${buttons}
+  </div>
+</body>
+</html>
+`;
+}
+
+function drawPanel(phrases) {
+  const width = 360;
+  const height = 480;
   const raw = Buffer.alloc((width * 3 + 1) * height);
   const set = (x, y, r, g, b) => {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
@@ -136,19 +215,35 @@ function panelCard(label) {
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) set(x, y, 244, 241, 234);
   }
-  for (let y = 16; y < 84; y += 1) {
-    for (let x = 36; x < 124; x += 1) set(x, y, 255, 255, 255);
+  for (let y = 24; y < 456; y += 1) {
+    for (let x = 30; x < 330; x += 1) set(x, y, 255, 255, 255);
   }
-  const text = String(label || "Panel").replace(/[^A-Za-z0-9 ]/g, "").slice(0, 12).toUpperCase();
-  for (let i = 0; i < text.length; i += 1) {
-    const glyph = GLYPHS[text[i]] || GLYPHS[" "];
+  for (let y = 88; y < 124; y += 1) {
+    for (let x = 48; x < 312; x += 1) set(x, y, 255, 255, 255);
+    if (y === 88 || y === 123) for (let x = 48; x < 312; x += 1) set(x, y, 190, 186, 178);
+  }
+  for (let y = 148; y < 184; y += 1) {
+    for (let x = 48; x < 196; x += 1) set(x, y, 59, 99, 251);
+  }
+  const text = String((phrases && phrases[0]) || "Add heading").replace(/[^A-Za-z0-9 ]/g, " ").toUpperCase();
+  drawText(set, text, 56, 158, 3);
+  return pngEncode(width, height, raw);
+}
+
+function drawText(set, text, x, y, scale) {
+  let cursor = x;
+  for (const char of text) {
+    const glyph = GLYPHS[char] || GLYPHS[" "];
     for (let row = 0; row < glyph.length; row += 1) {
       for (let col = 0; col < glyph[row].length; col += 1) {
-        if (glyph[row][col] === "1") set(42 + i * 6 + col, 40 + row, 28, 36, 48);
+        if (glyph[row][col] !== "1") continue;
+        for (let dy = 0; dy < scale; dy += 1) {
+          for (let dx = 0; dx < scale; dx += 1) set(cursor + col * scale + dx, y + row * scale + dy, 255, 255, 255);
+        }
       }
     }
+    cursor += (glyph[0].length + 1) * scale;
   }
-  return pngEncode(width, height, raw);
 }
 
 const GLYPHS = {

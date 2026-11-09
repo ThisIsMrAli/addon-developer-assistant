@@ -14,8 +14,8 @@ export function pngBytes() {
 }
 
 /**
- * Methods the sandbox passes to runtime.exposeApi, plus the panel's `_sandboxProxy.method()` calls.
- * The stand-in has to answer the add-on's API, not only the template's createRectangle.
+ * Methods the sandbox passes to runtime.exposeApi.
+ * A panel `_sandboxProxy.method()` call is not an exposed method. The stand-in answers only what the sandbox exposes.
  */
 export function exposedSandboxMethods(source) {
   const text = String(source || "");
@@ -47,8 +47,60 @@ export function exposedSandboxMethods(source) {
     }
   };
   if (parsed.ast) visit(parsed.ast);
-  for (const match of text.matchAll(/_sandboxProxy\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) found.add(match[1]);
   return [...found];
+}
+
+/** Panel calls through a sandbox proxy. These are not addOnUISdk.app.document methods. */
+export function panelSandboxCalls(source) {
+  const found = [];
+  const parsed = parseSource("panel.js", String(source || ""));
+  if (!parsed.ast) return found;
+  const visit = (node) => {
+    if (!node || typeof node !== "object" || typeof node.type !== "string") return;
+    if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && !node.callee.computed) {
+      const chain = [];
+      let current = node.callee.object;
+      while (current) {
+        if (current.type === "Identifier") {
+          chain.push(current.name);
+          break;
+        }
+        if (current.type === "ThisExpression") {
+          chain.push("this");
+          break;
+        }
+        if (current.type === "MemberExpression" && !current.computed && current.property?.type === "Identifier") {
+          chain.push(current.property.name);
+          current = current.object;
+          continue;
+        }
+        break;
+      }
+      if (chain.some((part) => part === "proxy" || /sandboxproxy/i.test(part))) {
+        const name = node.callee.property?.name;
+        if (typeof name === "string") found.push(name);
+      }
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object" && typeof value.type === "string") visit(value);
+    }
+  };
+  visit(parsed.ast);
+  return found;
+}
+
+/** Panel proxy calls whose names are not in runtime.exposeApi. */
+export function sandboxApiMismatches(files) {
+  const exposed = new Set();
+  const called = [];
+  for (const file of files || []) {
+    const text = String(file.text || "");
+    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(file.rel || file.file || "code.js")) continue;
+    for (const name of exposedSandboxMethods(text)) exposed.add(name);
+    called.push(...panelSandboxCalls(text));
+  }
+  return [...new Set(called.filter((name) => !exposed.has(name)))];
 }
 
 export function standInSource(methods = []) {

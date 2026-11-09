@@ -488,12 +488,43 @@ export function uncaughtMessages(lines) {
 
 const PRIMARY_SKIP = /^(close|cancel|back|skip)$/i;
 
+/** Text the panel revealed after an action. The empty-field hint is a validation message, not a script error. */
+export function shownStatusError(before, after) {
+  const previous = new Set(String(before || "").split("\n").map((line) => line.trim()).filter(Boolean));
+  const lines = String(after || "").split("\n").map((line) => line.trim()).filter((line) => line && !previous.has(line));
+  return lines.find((line) => /error|failed|could not|couldn't|unable to|not a function|something went wrong/i.test(line) && !/type a heading first/i.test(line)) || "";
+}
+
 /** Presses the panel's first actions and records whether the sandbox API answered. */
 export async function exercisePrimary(page, url) {
   const actions = [];
   try {
     await page.goto(url);
     await settle(page, 250, 2000);
+    await page.eval(`(() => {
+      const sample = "Sample heading";
+      const skip = /license|token|password|secret|key/i;
+      const set = (el) => {
+        const label = (el.getAttribute("label") || el.getAttribute("placeholder") || el.getAttribute("name") || el.getAttribute("aria-label") || "").trim();
+        if (skip.test(label)) return;
+        const current = "value" in el ? String(el.value || "") : "";
+        if (current.trim()) return;
+        el.value = sample;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      const walk = (root) => {
+        const nodes = root.querySelectorAll ? root.querySelectorAll("input, textarea, sp-textfield, sp-textarea") : [];
+        for (const el of nodes) {
+          if (el.matches && el.matches("input[type='password'], input[type='hidden']")) continue;
+          set(el);
+          if (el.shadowRoot) walk(el.shadowRoot);
+        }
+        const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+        for (const el of all) if (el.shadowRoot) walk(el.shadowRoot);
+      };
+      walk(document);
+    })()`);
     const labels = await page.eval(`(() => {
       const found = [];
       const walk = (root) => {
@@ -511,6 +542,7 @@ export async function exercisePrimary(page, url) {
     })()`);
     for (const label of (labels || []).filter((label) => label && !PRIMARY_SKIP.test(label) && !RISKY.test(label)).slice(0, 3)) {
       const before = (page.seen?.exceptions?.length || 0) + (page.seen?.console?.length || 0);
+      const beforeText = await page.eval("document.body ? document.body.innerText : ''");
       const clicked = await page.eval(`(() => {
         const want = ${JSON.stringify(label)};
         const walk = (root) => {
@@ -528,7 +560,8 @@ export async function exercisePrimary(page, url) {
       })()`);
       await sleep(300);
       const lines = [...(page.seen?.exceptions || []), ...(page.seen?.console || [])].slice(before);
-      const error = lines.find((line) => /is not a function|uncaught|unhandled rejection|unhandled promise/i.test(line)) || "";
+      const afterText = await page.eval("document.body ? document.body.innerText : ''");
+      const error = lines.find((line) => /is not a function|uncaught|unhandled rejection|unhandled promise/i.test(line)) || shownStatusError(beforeText, afterText);
       actions.push({ label, ok: Boolean(clicked) && !error, error });
     }
   } catch (error) {

@@ -127,7 +127,7 @@ test("NY2 a real SWC panel is judged from its script, and a loading placeholder 
   const html = fs.readFileSync(htmlPath, "utf8").replace("</body>", "<p>Loading Heading Image…</p></body>");
   fs.writeFileSync(htmlPath, html);
   const appPath = path.join(dir, "src/ui/components/App.js");
-  fs.writeFileSync(appPath, fs.readFileSync(appPath, "utf8").replace("Create Rectangle", "Insert heading"));
+  fs.writeFileSync(appPath, fs.readFileSync(appPath, "utf8").replaceAll("Create Rectangle", "Insert heading").replaceAll("createRectangle", "addHeading"));
   const ok = verifyFeature({ dir, brief: "Add a styled heading to the document and a Spectrum panel with a form", build: false });
   assert.equal(ok.ok, true, ok.problems.join(" "));
   assert.doesNotMatch(ok.problems.join(" "), /blank|Spectrum|does not parse/);
