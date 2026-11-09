@@ -1,8 +1,20 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { checkJsSyntax, scanHtml, scanJs, stripComments } from "./code-scan.mjs";
+import { checkJsSyntax, controlFlow, projectPanels, scanHtml, scanJs, storageKinds, stripComments } from "./code-scan.mjs";
 import { buildProject } from "./package-addon.mjs";
+
+/** Pinned to the release whose scaffolder was checked. `AddOnBuilder._updateManifest` sets `testId` and the display name. */
+export const CREATE_CCWEB_ADD_ON = "@adobe/create-ccweb-add-on@3.11.0";
+
+/** `@adobe/ccweb-add-on-manifest` rejects any other `name` during `ccweb-add-on-scripts build`. */
+export const MANIFEST_NAME = /^[a-zA-Z0-9]+[a-zA-Z0-9 ]{2,44}$/;
+
+const PLACEHOLDER_NAMES = new Set([
+  "", "name", "addon", "add-on", "your add-on", "your addon", "todo", "placeholder",
+  "template", "add-on name", "your add-on name"
+]);
 
 const ANSWERED = new Set(["origin", "feasibility", "design", "implement"]);
 
@@ -48,7 +60,7 @@ export function scaffoldProject({ dir, template }) {
     if (entries.length) throw new Error(`${dir} is not an empty folder.`);
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  const result = spawnSync("npx", ["--yes", "@adobe/create-ccweb-add-on", name, "--template", template, "--analytics", "off"], {
+  const result = spawnSync("npx", ["--yes", CREATE_CCWEB_ADD_ON, name, "--template", template, "--analytics", "off"], {
     cwd: parent,
     encoding: "utf8",
     timeout: 300000,
@@ -87,8 +99,11 @@ export function briefNeeds(brief) {
  * Document text that stays inside the current page.
  * Page size is insertionParent.width and height (use-text.md).
  * The visual center is centerPointLocal, from boundsLocal (position-elements.md).
- * resize() with ResizeBehavior.contain sets the font size from that width (resize-elements.md).
+ * resize() with ResizeBehavior.contain fits both the width and the height (resize-elements.md).
+ * The font is capped, and the node is resized only when it is larger than that box.
+ * The first heading is centered. The next one sits below existing content or the selection.
  * The default 100pt text is left at the top-left origin, so a heading runs off the left edge.
+ * Scaling a short word to the full page width makes it overflow the other edge.
  */
 export const TEXT_INSIDE_PAGE = `import { editor, constants } from "express-document-sdk";
 
@@ -97,21 +112,44 @@ export function addHeading(heading) {
   const textNode = editor.createText(heading);
   const margin = Math.round(Math.min(page.width, page.height) * 0.08);
   const maxWidth = Math.max(32, page.width - margin * 2);
+  const maxHeight = Math.max(32, page.height - margin * 2);
+  const cap = Math.min(72, Math.round(page.width / 16));
   page.children.append(textNode);
   textNode.fullContent.applyCharacterStyles(
-    { color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
+    { fontSize: cap, color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
     { start: 0, length: heading.length }
   );
-  textNode.resize({
-    width: maxWidth,
-    behavior: constants.ResizeBehavior.contain,
-    avoidScalingVisualDetailsIfPossible: false
-  });
   const box = textNode.boundsLocal;
-  textNode.setPositionInParent(
-    { x: page.width / 2, y: page.height / 2 },
-    textNode.centerPointLocal || { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-  );
+  if (box.width > maxWidth || box.height > maxHeight) {
+    textNode.resize({
+      width: maxWidth,
+      height: maxHeight,
+      behavior: constants.ResizeBehavior.contain,
+      avoidScalingVisualDetailsIfPossible: false
+    });
+  }
+  const fitted = textNode.boundsLocal;
+  const anchor = textNode.centerPointLocal || { x: fitted.x + fitted.width / 2, y: fitted.y + fitted.height / 2 };
+  let below = null;
+  for (const node of page.children) {
+    if (node === textNode || !node.boundsInParent) continue;
+    const placed = node.boundsInParent;
+    const bottom = placed.y + placed.height;
+    if (below === null || bottom > below) below = bottom;
+  }
+  const selected = editor.context.selection && editor.context.selection[0];
+  if (selected && selected !== textNode && selected.boundsInParent) {
+    const placed = selected.boundsInParent;
+    const bottom = placed.y + placed.height;
+    if (below === null || bottom > below) below = bottom;
+  }
+  const gap = Math.max(8, Math.round(fitted.height * 0.15));
+  let centerY = below === null ? page.height / 2 : below + gap + fitted.height / 2;
+  const minY = margin + fitted.height / 2;
+  const maxY = page.height - margin - fitted.height / 2;
+  if (centerY > maxY) centerY = maxY;
+  if (centerY < minY) centerY = minY;
+  textNode.setPositionInParent({ x: page.width / 2, y: centerY }, anchor);
 }
 `;
 
@@ -123,7 +161,7 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
     apis.push({
       api: "editor.createText()",
       runtime: "document sandbox",
-      note: "Create the text in code.js. Read the page size from editor.context.insertionParent (use-text.md). Fit the font with resize() and constants.ResizeBehavior.contain to that width minus a margin (resize-elements.md). Center it with setPositionInParent, using centerPointLocal from boundsLocal so the visual box stays inside the page (position-elements.md). Do not leave the default 100pt text on the top-left origin.",
+      note: "Create the text in code.js. Read the page size from editor.context.insertionParent (use-text.md). Cap the font (Math.min(72, page width / 16)) and call resize() with constants.ResizeBehavior.contain for both width and height, and only when boundsLocal is larger than the page minus an 8% margin (resize-elements.md). Center the first heading with setPositionInParent, using centerPointLocal from boundsLocal (position-elements.md). Place the next heading below existing children or the selection, using boundsInParent, and keep that y inside the page. Do not leave the default 100pt text on the top-left origin, do not scale a short heading to the full page width, and do not stack every heading on the same point.",
       snippet: TEXT_INSIDE_PAGE
     });
   }
@@ -183,9 +221,11 @@ export function verifyFeature({ dir, brief, build = true }) {
   const { manifest } = readManifest(dir);
   const files = sourceFiles(dir);
   const problems = [];
+  problems.push(...manifestIdentityProblems(manifest));
   if (!files.length) problems.push("No source was written.");
   const calls = [];
   const sandboxScans = [];
+  const codeFiles = [];
   for (const file of files) {
     const rel = path.relative(dir, file.file).split(path.sep).join("/");
     if (/\.(html?)$/i.test(file.file)) continue;
@@ -194,10 +234,12 @@ export function verifyFeature({ dir, brief, build = true }) {
     const syntax = /\.(mjs|cjs|jsx?|tsx?)$/i.test(file.file) ? checkJsSyntax(file.file) : scanned.syntax;
     if (syntax) problems.push(`${rel} does not parse. ${syntax}`);
     const role = fileRole(rel, manifest);
-    if (role === "sandbox") sandboxScans.push(scanned);
+    if (role === "sandbox") sandboxScans.push({ ...scanned, text: file.text });
+    codeFiles.push({ rel, file: rel, text: file.text });
     for (const call of scanned.calls) calls.push({ call, rel, role, text: file.text });
   }
   const html = files.filter((file) => /\.html?$/i.test(file.file)).map((file) => ({ ...scanHtml(file.text), rel: path.relative(dir, file.file) }));
+  const panels = projectPanels([...files.map((file) => ({ ...file, rel: path.relative(dir, file.file).split(path.sep).join("/") })), ...bundleSources(dir)]);
   const code = files.map((file) => stripComments(file.text)).join("\n");
   if (isStub(code, html)) problems.push("The add-on still has a canned stub (featureReady, a develop-feature field, or only the template's Create Rectangle).");
   const sandboxCalls = calls.filter((item) => item.role === "sandbox");
@@ -215,15 +257,14 @@ export function verifyFeature({ dir, brief, build = true }) {
       problems.push("Styled text needs a style: font, size, or color.");
     }
     if (created.length && !textStaysOnPage(sandboxScans)) {
-      problems.push("Inserted text has no positioning or bounds. Read editor.context.insertionParent width and height (use-text.md), fit the font with resize() to that width minus a margin (resize-elements.md), and center it with setPositionInParent using boundsLocal or centerPointLocal (position-elements.md). A fixed font size at the top-left origin runs off the left edge.");
+      problems.push("Inserted text has no positioning or bounds. Read editor.context.insertionParent width and height (use-text.md), cap the font, and fit both width and height with resize() only when the text is larger than the page minus a margin (resize-elements.md). Center the first heading with setPositionInParent using boundsLocal or centerPointLocal (position-elements.md), and place the next one below existing content or the selection using boundsInParent so consecutive headings do not overlap. A fixed font size at the top-left origin runs off the left edge, and scaling a short heading to the full page width overflows the other edge.");
     }
   }
   if (needs.includes("image") && !named(calls, /(^|\.)(addImage|createImage)$/).length) {
     problems.push("An image needs an addImage() or createImage() call.");
   }
   if (needs.includes("panel")) {
-    const tags = html.flatMap((page) => page.tags);
-    if (!tags.some((tag) => tag === "sp-textfield" || tag === "sp-button" || tag === "sp-theme")) {
+    if (!panels.spectrum) {
       problems.push("A Spectrum form needs a Spectrum Web Component such as sp-textfield or sp-button in the markup, not in a comment.");
     }
   }
@@ -240,17 +281,14 @@ export function verifyFeature({ dir, brief, build = true }) {
         ? "OAuth needs entryPoints[].permissions.oauth. A top-level permissions key is not in the manifest version 2 schema."
         : "OAuth needs entryPoints[].permissions.oauth with the provider host.");
     }
-    const authorizeFiles = new Set(named(calls, /(^|\.)authorize$/).map((item) => item.rel));
-    for (const rel of authorizeFiles) {
-      const file = files.find((item) => path.relative(dir, item.file).split(path.sep).join("/") === rel);
-      if (file && !/\bcatch\b/.test(stripComments(file.text))) problems.push("authorize() needs a catch. An unhandled rejection is not a finished sign-in.");
+    const flowForAuth = controlFlow(codeFiles);
+    if (named(calls, /(^|\.)authorize$/).length && flowForAuth.unhandledAuthorize) {
+      problems.push("authorize() needs a catch. An unhandled rejection is not a finished sign-in.");
     }
   }
   if (needs.includes("storage")) {
-    const stores = named(calls, /(^|\.)(getItem|setItem|removeItem)$/);
-    const client = stores.some((item) => /clientStorage/.test(item.call));
-    const local = stores.some((item) => /^localStorage\./.test(item.call));
-    if (!client) problems.push(local ? "Token storage needs addOnUISdk.instance.clientStorage. localStorage is not that API." : "Token storage needs addOnUISdk.instance.clientStorage.");
+    const traced = storageKinds(codeFiles);
+    if (!traced.client) problems.push(traced.local ? "Token storage needs addOnUISdk.instance.clientStorage. localStorage is not that API." : "Token storage needs addOnUISdk.instance.clientStorage.");
   }
   if (needs.includes("rendition")) {
     if (!named(calls, /(^|\.)createRenditions$/).length) {
@@ -261,9 +299,9 @@ export function verifyFeature({ dir, brief, build = true }) {
     }
     if (!permissions.sandbox.includes("allow-downloads")) problems.push("A download needs entryPoints[].permissions.sandbox to include allow-downloads.");
   }
-  if (/\bthrow\b/.test(code) && !/\bcatch\b/.test(code)) problems.push("The code throws and nothing catches it.");
-  const visible = html.some((page) => page.text || page.controls);
-  if (html.length && !visible && (needs.includes("panel") || needs.length)) problems.push("The panel is blank: no text and no control.");
+  if (controlFlow(codeFiles).unhandledThrow) problems.push("The code throws and nothing catches it.");
+  const visible = Boolean(panels.text || panels.controls);
+  if ((html.length || panels.tags.length) && !visible && (needs.includes("panel") || needs.length)) problems.push("The panel is blank: no text and no control.");
   if (!needs.length) {
     const word = distinctiveWord(brief);
     if (word && !new RegExp(`\\b${word}\\b`, "i").test(code)) problems.push(`The code does not mention ${word} from the brief.`);
@@ -281,23 +319,79 @@ function textStaysOnPage(scans) {
     const calls = scan.calls || [];
     if (!calls.some((call) => /(^|\.)createText$/.test(call))) return false;
     const words = new Set(scan.words || []);
+    const source = String(scan.text || "");
     const positioned = calls.some((call) => /(^|\.)setPositionInParent$/.test(call));
     const bounds = words.has("boundsLocal") || words.has("boundsInParent") || words.has("centerPointLocal");
     const page = words.has("insertionParent") || words.has("artboards") || words.has("currentPage");
-    const fitted = calls.some((call) => /(^|\.)resize$/.test(call)) && page && words.has("width");
-    const fontFromPage = words.has("fontSize") && page && words.has("width");
-    return positioned && bounds && (fitted || fontFromPage);
+    const bothAxes = /resize\s*\(\s*\{[^}]*\bwidth\b[^}]*\bheight\b[^}]*\}/.test(source) || /resize\s*\(\s*\{[^}]*\bheight\b[^}]*\bwidth\b[^}]*\}/.test(source);
+    const capped = /Math\.min\s*\(\s*\d+/.test(source) && words.has("fontSize");
+    const onlyShrink = /width\s*>\s*maxWidth/.test(source) && /height\s*>\s*maxHeight/.test(source);
+    const stacked = (words.has("children") || words.has("selection")) && words.has("boundsInParent");
+    return positioned && bounds && page && bothAxes && capped && onlyShrink && stacked;
   });
 }
 
+function bundleSources(dir) {
+  const found = [];
+  for (const name of ["dist", "build"]) {
+    const root = path.join(dir, name);
+    if (!fs.existsSync(root)) continue;
+    const walk = (folder) => {
+      for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+        if (entry.name === "node_modules") continue;
+        const full = path.join(folder, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(html?|jsx?|mjs)$/i.test(entry.name) && fs.statSync(full).size < 2_000_000) {
+          found.push({ rel: path.relative(dir, full).split(path.sep).join("/"), text: fs.readFileSync(full, "utf8") });
+        }
+      }
+    };
+    walk(root);
+  }
+  return found;
+}
+
+/**
+ * The same substitution as `@adobe/ccweb-add-on-scaffolder` `AddOnBuilder._getAddOnName`.
+ * A name that already matches the manifest pattern is kept. `Color Note e` must stay `Color Note e`.
+ * Running the substitution on it inserts spaces before capitals and the build then rejects the name.
+ */
+export function manifestDisplayName(addOnName) {
+  const raw = String(addOnName || "").replace(/\s+/g, " ").trim();
+  if (MANIFEST_NAME.test(raw) && !isPlaceholderName(raw)) return raw;
+  const camelCase = raw.replace(/[-_]\w/g, (text) => text.replace(/[-_]/, "").toUpperCase());
+  const wordCase = camelCase.replace(/([A-Z])/g, " $1").replace(/\s+/g, " ").trim();
+  const titled = wordCase ? wordCase.charAt(0).toUpperCase() + wordCase.slice(1) : "";
+  return MANIFEST_NAME.test(titled) && !isPlaceholderName(titled) ? titled : "";
+}
+
+export function isPlaceholderName(name) {
+  return PLACEHOLDER_NAMES.has(String(name || "").replace(/\s+/g, " ").trim().toLowerCase());
+}
+
+function manifestIdentityProblems(manifest) {
+  const problems = [];
+  const display = String(manifest?.name || "").replace(/\s+/g, " ").trim();
+  if (isPlaceholderName(display)) {
+    problems.push(`The manifest name is still a placeholder ("${display}"). The scaffolder writes a display name such as Heading Panel.`);
+  } else if (!MANIFEST_NAME.test(display)) {
+    problems.push(`The manifest name "${display}" does not match ${MANIFEST_NAME}. A hyphenated package name is not a display name. @adobe/ccweb-add-on-scaffolder turns heading-panel into Heading Panel.`);
+  }
+  if (!String(manifest?.testId || "").trim()) {
+    problems.push("The manifest needs a testId. ccweb-add-on-scripts rejects a developer manifest without one.");
+  }
+  return problems;
+}
+
 export function applyManifestName(dir, name) {
-  const wanted = String(name || "").trim();
-  if (!wanted) return "";
+  const display = manifestDisplayName(name);
+  if (!display) return "";
   for (const rel of ["src/manifest.json", "manifest.json"]) {
     const file = path.join(dir, rel);
     if (!fs.existsSync(file)) continue;
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-    manifest.name = wanted;
+    manifest.name = display;
+    if (!String(manifest.testId || "").trim()) manifest.testId = randomUUID();
     fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
     return file;
   }
@@ -307,9 +401,11 @@ export function applyManifestName(dir, name) {
 function writeFixture(dir, template) {
   const src = path.join(dir, "src");
   fs.mkdirSync(src, { recursive: true });
+  const display = manifestDisplayName(path.basename(dir)) || "Local Fixture";
   fs.writeFileSync(path.join(dir, "package.json"), `${JSON.stringify({ name: path.basename(dir), private: true, description: "Local fixture.", scripts: {} }, null, 2)}\n`);
   fs.writeFileSync(path.join(src, "manifest.json"), `${JSON.stringify({
-    name: path.basename(dir),
+    name: display,
+    testId: randomUUID(),
     version: "1.0.0",
     manifestVersion: 2,
     requirements: { apps: [{ name: "Express", apiVersion: 1 }] },

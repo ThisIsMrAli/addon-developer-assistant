@@ -193,6 +193,9 @@ export function developNext(session, { dashboardUp = false } = {}) {
     ? { action: "ask", ask: id, command: `node scripts/session.mjs ask --id ${id}`, say: `The \`${id}\` question goes on the dashboard. Run ask, then wait. Do not write to the user.` }
     : { action: "ask-in-chat", ask: id, command: `node scripts/session.mjs ask --id ${id}`, say: `Ask \`${id}\` with AskQuestion, then record it with session.mjs answer.` };
 
+  if (session.develop?.implemented === false && session.develop?.verify && session.develop.verify.ok === false) {
+    return { action: "run", command: "node scripts/develop.mjs record", say: "Record failed. Fix the feature and run `node scripts/develop.mjs record` again." };
+  }
   if (step("done")?.status === "done") {
     const expressLine = expressOutcome(session);
     return { action: "finished", say: `The build is finished. Give the user the summary. Run \`node scripts/dashboard.mjs stop\` if the dashboard is still up. ${expressLine} This is not marketplace approval.` };

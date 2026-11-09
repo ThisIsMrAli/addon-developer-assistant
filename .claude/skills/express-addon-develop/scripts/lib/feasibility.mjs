@@ -84,7 +84,7 @@ function result(kind, pageText, needle, page, summary, pages) {
   }
   return {
     class: kind,
-    summary: `${summary} Evidence: “${evidence.slice(0, 240)}”`,
+    summary: `${summary} Evidence: “${plainSentence(evidence).slice(0, 240)}”`,
     evidence,
     page,
     guide: Boolean(pages.guide && pages.guide.includes("Spectrum Web Components")),
@@ -118,6 +118,18 @@ export function sentenceWith(text, needle) {
   if (endDot >= 0) end = Math.min(end, endDot + 1);
   if (endLine >= 0) end = Math.min(end, endLine);
   return source.slice(start + 1, end).replace(/\s+/g, " ").trim();
+}
+
+/** The dashboard shows this sentence. Markdown and HTML from the doc page are not left in it. */
+export function plainSentence(value) {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&lt;|&gt;|&amp;|&quot;|&#39;|&nbsp;/gi, " ")
+    .replace(/`+/g, "")
+    .replace(/•/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function pagesFromDisk(out, docs) {

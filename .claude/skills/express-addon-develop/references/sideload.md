@@ -7,6 +7,7 @@ The fixed rules:
 - Do not disable Chrome security flags. Leave `chrome://flags/#local-network-access-check` enabled and click Allow.
 - Do not pass `--ignore-certificate-errors`.
 - The dev server is `https://localhost:5241`. Never open `127.0.0.1`.
+- Pass `--analytics off` to `ccweb-add-on-scripts` (`npm start -- --analytics off`, `npm run build -- --analytics off`, `npm run package -- --analytics off`). The flag is `analytics` (`on` or `off`) in `@adobe/ccweb-add-on-analytics`. Without it the CLI asks to send analytics and exits. `off` does not send analytics.
 - `ccweb-add-on-scripts` listens on `[::1]:5241` only. Probe `[::1]` and `127.0.0.1` and say which is listening. A client that resolves `localhost` to `127.0.0.1` is refused.
 - Chrome policy `LoopbackNetworkBlockedForUrls` (often `["*"]`) blocks that loopback call. The skip or failure names that policy. Read `/etc/opt/chrome/policies` and `/etc/chromium/policies`. Do not change the policy.
 - When localhost is blocked, the real Express test is a private link, and only after the person approves it: `npm run package`, then `dist.zip`, then Manage add-ons, then the listing, then Private link. A publisher profile is required first, and the logo must be 250x250. Do not create the publisher profile or the listing.

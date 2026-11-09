@@ -46,7 +46,11 @@ export function readSession(out) {
 }
 
 export function readReport(out) {
-  return readJson(files.report(out));
+  const top = readJson(files.report(out));
+  const nested = readJson(path.join(out, "review", "report.json"));
+  if (top?.findings?.length) return top;
+  if (nested?.findings?.length) return nested;
+  return top || nested;
 }
 
 export function readServer(out) {

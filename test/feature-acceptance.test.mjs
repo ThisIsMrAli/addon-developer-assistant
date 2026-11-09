@@ -18,6 +18,7 @@ function addon(files) {
 
 const manifest = (extra = {}) => `${JSON.stringify({
   name: "Sample",
+  testId: "11111111-1111-4111-8111-111111111111",
   version: "1.0.0",
   manifestVersion: 2,
   requirements: { apps: [{ name: "Express", apiVersion: 1 }] },

@@ -6,6 +6,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export const DEV_ORIGIN = "https://localhost:5241";
@@ -101,7 +102,7 @@ export function trustDevcert(io = {}) {
       if (aptFailed) {
         let downloaded = false;
         for (const url of install.urls) {
-          const curl = call("curl", ["-fsSL", "-o", "/tmp/nss-tools.deb", url]);
+          const curl = call("curl", ["-fsSL", "-o", path.join(os.tmpdir(), "nss-tools.deb"), url]);
           if (curl.status === 0) {
             downloaded = true;
             break;
@@ -122,7 +123,7 @@ export function trustDevcert(io = {}) {
             error: "The apt mirror failed and the Debian pool download failed."
           });
         }
-        const dpkg = call("sudo", ["dpkg", "-i", "/tmp/nss-tools.deb"]);
+        const dpkg = call("sudo", ["dpkg", "-i", path.join(os.tmpdir(), "nss-tools.deb")]);
         if (dpkg.status !== 0) {
           return finish({
             ok: false,
@@ -139,8 +140,9 @@ export function trustDevcert(io = {}) {
           });
         }
       } else {
-        for (const url of install.urls) planned.push(`curl -fsSL -o /tmp/nss-tools.deb ${url}`);
-        planned.push("sudo dpkg -i /tmp/nss-tools.deb");
+        const deb = path.join(os.tmpdir(), "nss-tools.deb");
+        for (const url of install.urls) planned.push(`curl -fsSL -o ${deb} ${url}`);
+        planned.push(`sudo dpkg -i ${deb}`);
       }
     }
   }

@@ -11,7 +11,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { reminder } from "../../express-addon-review/scripts/lib/next.mjs";
 import { readMerged } from "../../express-addon-review/scripts/lib/session.mjs";
-import { caPath, trustDevcert } from "./lib/devcert.mjs";
+import { trustDevcert } from "./lib/devcert.mjs";
+import { devcertReady } from "./lib/ssl-setup.mjs";
 import {
   checkTrusted,
   defaultProbe,
@@ -84,7 +85,7 @@ async function run() {
     const home = process.env.HOME;
     server = await openDevServer({
       cwd: session?.addon?.path,
-      caReady: () => fs.existsSync(caPath(home || "")),
+      caReady: () => devcertReady(home || ""),
       trust: () => trustDevcert({ home, exec: true }),
       check: checkTrusted,
       identify: (origin) => identifyDevServer(origin, manifestName(session))

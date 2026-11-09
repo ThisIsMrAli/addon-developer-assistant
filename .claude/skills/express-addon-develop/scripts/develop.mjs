@@ -51,6 +51,8 @@ try {
   let next = "Run `node scripts/session.mjs next` and do what it says. Do not end your turn.";
   if (/not an empty folder|Nothing was deleted/.test(error.message || "")) {
     next = "Stopped. No session was created, and nothing was deleted. Do not run session.mjs next.";
+  } else if (/The feature is not done/.test(error.message || "")) {
+    next = "Record failed. Fix the feature and run `node scripts/develop.mjs record` again. Do not end your turn.";
   } else {
     try {
       const out = resolveOut();
@@ -325,7 +327,8 @@ async function audit() {
     screens,
     url: served.url,
     note: "Headless Chrome served the built panel with an SDK stand-in. This is not an Adobe Express pass.",
-    audit: auditJson
+    audit: auditJson,
+    rendered: Boolean(auditJson.rendered)
   });
   patchDevelop(out, {
     audited: true,
@@ -335,7 +338,7 @@ async function audit() {
     panelCaptures: captures,
     standIn: served.label,
     expressPass: false,
-    rendered: false,
+    rendered: Boolean(auditJson.rendered),
     reviewOut
   });
   fs.writeFileSync(path.join(out, "browser-run.json"), `${JSON.stringify(record, null, 2)}\n`);
@@ -351,11 +354,11 @@ async function audit() {
   }, out);
 }
 
-function browserRun({ standIn, screens, url, note, audit }) {
+function browserRun({ standIn, screens, url, note, audit, rendered = false }) {
   return {
     standIn,
     expressPass: false,
-    rendered: false,
+    rendered: Boolean(rendered),
     headlessScreens: screens,
     capturedOn: screens > 0 ? "this computer" : "not captured",
     ...(url ? { url } : {}),

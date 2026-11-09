@@ -43,7 +43,9 @@ const sdk = {
   instance: {
     runtime: {
       type: RuntimeType.panel,
-      apiProxy: async () => new Proxy({}, { get: () => async () => ({}) }),
+      apiProxy: async () => ({
+        createRectangle() { return { width: 240, height: 180 }; }
+      }),
       exposeApi() {}
     },
     clientStorage: {
@@ -53,7 +55,6 @@ const sdk = {
     }
   }
 };
-export { constants };
 export default sdk;
 `;
 

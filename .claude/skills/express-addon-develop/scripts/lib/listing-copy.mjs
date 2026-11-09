@@ -5,8 +5,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { addonCorpus } from "../../../express-addon-review/scripts/lib/listing.mjs";
+import { panelMarkup } from "./code-scan.mjs";
 
 const BOILERPLATE = /^(get started|create rectangle|hello world|welcome|click me|javascript|swc-javascript|adobe creative cloud web add-on\.?)$/i;
+const PLACEHOLDER = /^(loading\b|please wait\b|placeholder\b)/i;
 
 export function phrasesFromAddon(dir) {
   const corpus = addonCorpus(dir);
@@ -16,7 +18,7 @@ export function phrasesFromAddon(dir) {
     const text = String(raw || "").replace(/\s+/g, " ").trim();
     if (text.length < 3 || text.length > 80) return;
     if (/[{}<>]/.test(text)) return;
-    if (BOILERPLATE.test(text) || /adobe creative cloud web add-on/i.test(text) || /^get started$/i.test(text)) return;
+    if (BOILERPLATE.test(text) || PLACEHOLDER.test(text) || /adobe creative cloud web add-on/i.test(text) || /^get started$/i.test(text)) return;
     if (!corpus.includes(text.toLowerCase())) return;
     if (htmlPhrases.some((item) => item.toLowerCase() === text.toLowerCase())) return;
     if (metaPhrases.some((item) => item.toLowerCase() === text.toLowerCase())) return;
@@ -43,6 +45,9 @@ export function phrasesFromAddon(dir) {
           .replace(/<!--[\s\S]*?-->/g, " ")
           .replace(/<title[\s\S]*?<\/title>/gi, " ");
         for (const piece of page.replace(/<[^>]+>/g, "\n").split("\n")) consider(htmlPhrases, piece);
+      } else if (/\.(jsx?|tsx?|mjs)$/i.test(entry.name)) {
+        const panel = panelMarkup(fs.readFileSync(full, "utf8"), entry.name);
+        for (const piece of panel.text.split(/(?<=[.!?])\s+/)) consider(htmlPhrases, piece);
       } else if (/(^|\/)manifest\.json$/i.test(full.replaceAll("\\", "/"))) {
         let manifest = {};
         try { manifest = JSON.parse(fs.readFileSync(full, "utf8")); } catch { manifest = {}; }
