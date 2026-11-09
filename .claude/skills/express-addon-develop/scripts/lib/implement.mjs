@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { checkJsSyntax, scanHtml, scanJs, stripComments } from "./code-scan.mjs";
 import { buildProject } from "./package-addon.mjs";
 
 const ANSWERED = new Set(["origin", "feasibility", "design", "implement"]);
@@ -72,12 +73,47 @@ export function scaffoldProject({ dir, template }) {
 export function briefNeeds(brief) {
   const text = String(brief || "");
   const needs = [];
-  if (/\b(styled\s+text|create\s*text|add\s+(?:styled\s+)?text|heading|headline)\b/i.test(text)) needs.push("text");
+  const onDocument = /\bdocument sandbox\b/i.test(text) || /\binto the document\b/i.test(text) || (/\b(document|canvas|artboard)\b/i.test(text) && /\b(text|heading|image|photo)\b/i.test(text));
+  if (/\b(styled\s+text|create\s*text|add\s+(?:styled\s+)?text|heading|headline)\b/i.test(text) || (onDocument && /\btext\b/i.test(text))) needs.push("text");
   if (/\b(image|photo|picture)\b/i.test(text)) needs.push("image");
   if (/\b(spectrum|sp-textfield|sp-button)\b/i.test(text) || (/\bform\b/i.test(text) && /\bpanel\b/i.test(text))) needs.push("panel");
-  if (/\boauth\b/i.test(text) || /\b(dropbox|clientstorage|network request)\b/i.test(text)) needs.push("oauth");
-  return needs;
+  if (/\boauth\b/i.test(text) || /\b(dropbox|network request)\b/i.test(text)) needs.push("oauth");
+  if (/\bclientstorage\b/i.test(text) || (/\boauth\b/i.test(text) && /\bstore\b/i.test(text))) needs.push("storage");
+  if (/\b(rendition|createrenditions|download)\b/i.test(text) || (/\bexport\b/i.test(text) && /\b(png|page|document|rendition)\b/i.test(text))) needs.push("rendition");
+  return [...new Set(needs)];
 }
+
+/**
+ * Document text that stays inside the current page.
+ * Page size is insertionParent.width and height (use-text.md).
+ * The visual center is centerPointLocal, from boundsLocal (position-elements.md).
+ * resize() with ResizeBehavior.contain sets the font size from that width (resize-elements.md).
+ * The default 100pt text is left at the top-left origin, so a heading runs off the left edge.
+ */
+export const TEXT_INSIDE_PAGE = `import { editor, constants } from "express-document-sdk";
+
+export function addHeading(heading) {
+  const page = editor.context.insertionParent;
+  const textNode = editor.createText(heading);
+  const margin = Math.round(Math.min(page.width, page.height) * 0.08);
+  const maxWidth = Math.max(32, page.width - margin * 2);
+  page.children.append(textNode);
+  textNode.fullContent.applyCharacterStyles(
+    { color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
+    { start: 0, length: heading.length }
+  );
+  textNode.resize({
+    width: maxWidth,
+    behavior: constants.ResizeBehavior.contain,
+    avoidScalingVisualDetailsIfPossible: false
+  });
+  const box = textNode.boundsLocal;
+  textNode.setPositionInParent(
+    { x: page.width / 2, y: page.height / 2 },
+    textNode.centerPointLocal || { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  );
+}
+`;
 
 /** The pages and calls the agent must use. Nothing here is written into the project. */
 export function implementationHandoff({ brief, pages = [], design = "" }) {
@@ -87,7 +123,8 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
     apis.push({
       api: "editor.createText()",
       runtime: "document sandbox",
-      note: "Create the text in code.js, set a style (font, size, or color), and append it to the document."
+      note: "Create the text in code.js. Read the page size from editor.context.insertionParent (use-text.md). Fit the font with resize() and constants.ResizeBehavior.contain to that width minus a margin (resize-elements.md). Center it with setPositionInParent, using centerPointLocal from boundsLocal so the visual box stays inside the page (position-elements.md). Do not leave the default 100pt text on the top-left origin.",
+      snippet: TEXT_INSIDE_PAGE
     });
   }
   if (needs.includes("image")) {
@@ -104,11 +141,18 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
       note: "Build the form with Spectrum Web Components. Do not leave a plain input labelled Note."
     });
   }
-  if (needs.includes("oauth")) {
+  if (needs.includes("oauth") || needs.includes("storage")) {
     apis.push({
-      api: "addOnUISdk.app.oauth",
+      api: "addOnUISdk.app.oauth.authorize()",
       runtime: "iframe runtime",
-      note: "Declare permissions.oauth in manifest.json. clientStorage is addOnUISdk.instance.clientStorage."
+      note: "Call authorize and catch a rejection. The host list goes in entryPoints[].permissions.oauth. Store tokens with addOnUISdk.instance.clientStorage, not localStorage."
+    });
+  }
+  if (needs.includes("rendition")) {
+    apis.push({
+      api: "addOnUISdk.app.document.createRenditions()",
+      runtime: "iframe runtime",
+      note: "Use constants.Range and RenditionIntent. A download needs entryPoints[].permissions.sandbox to include allow-downloads. exportPage is not this API."
     });
   }
   if (!apis.length) {
@@ -131,31 +175,119 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
 }
 
 /**
- * The feature is real only when the code calls the APIs the brief needs, the project builds,
- * and a canned stub is absent. A failure is a list of problems. It does not mark the step done.
+ * The feature is real only when parsed code calls the APIs the brief needs, the project builds,
+ * and a canned stub is absent. Comments do not count. A failure is a list of problems.
  */
 export function verifyFeature({ dir, brief, build = true }) {
   const needs = briefNeeds(brief);
+  const { manifest } = readManifest(dir);
   const files = sourceFiles(dir);
-  const text = files.map((file) => file.text).join("\n");
   const problems = [];
-  if (!text.trim()) problems.push("No source was written.");
-  if (isStub(text, dir)) problems.push("The add-on still has a canned stub (featureReady, a develop-feature field, or only the template's Create Rectangle).");
-  if (needs.includes("text") && !/createText\s*\(/.test(text)) problems.push("Styled text needs editor.createText() in the document sandbox.");
-  if (needs.includes("text") && !/fontSize|characterStyle|setStyle|\bfont\b|fill|color/i.test(text)) problems.push("Styled text needs a style: font, size, or color.");
-  if (needs.includes("image") && !/addImage\s*\(|createImage\s*\(/.test(text)) problems.push("An image needs addImage() or createImage().");
-  if (needs.includes("panel") && !/<sp-textfield\b|<sp-button\b|<sp-theme\b|sp-textfield|sp-button/i.test(text)) problems.push("A Spectrum form needs a Spectrum Web Component such as sp-textfield or sp-button.");
-  if (needs.includes("oauth") && !manifestAllowsOauth(dir)) problems.push("Network or OAuth needs permissions.oauth in the manifest.");
+  if (!files.length) problems.push("No source was written.");
+  const calls = [];
+  const sandboxScans = [];
+  for (const file of files) {
+    const rel = path.relative(dir, file.file).split(path.sep).join("/");
+    if (/\.(html?)$/i.test(file.file)) continue;
+    if (/\.(json)$/i.test(file.file)) continue;
+    const scanned = scanJs(file.text);
+    const syntax = /\.(mjs|cjs|jsx?|tsx?)$/i.test(file.file) ? checkJsSyntax(file.file) : scanned.syntax;
+    if (syntax) problems.push(`${rel} does not parse. ${syntax}`);
+    const role = fileRole(rel, manifest);
+    if (role === "sandbox") sandboxScans.push(scanned);
+    for (const call of scanned.calls) calls.push({ call, rel, role, text: file.text });
+  }
+  const html = files.filter((file) => /\.html?$/i.test(file.file)).map((file) => ({ ...scanHtml(file.text), rel: path.relative(dir, file.file) }));
+  const code = files.map((file) => stripComments(file.text)).join("\n");
+  if (isStub(code, html)) problems.push("The add-on still has a canned stub (featureReady, a develop-feature field, or only the template's Create Rectangle).");
+  const sandboxCalls = calls.filter((item) => item.role === "sandbox");
+  const named = (list, pattern) => list.filter((item) => pattern.test(item.call));
+  if (needs.includes("text")) {
+    const created = named(sandboxCalls, /(^|\.)createText$/);
+    const inIframe = named(calls.filter((item) => item.role !== "sandbox"), /(^|\.)createText$/);
+    if (!created.length) {
+      problems.push(inIframe.length
+        ? "createText() is in the iframe. Document text has to be created in the document sandbox file."
+        : "Styled text needs editor.createText() in the document sandbox.");
+    }
+    const sandboxText = sandboxCalls.map((item) => stripComments(item.text)).join("\n");
+    if (created.length && !/fontSize|applyCharacterStyles|characterStyles|\bfont\b|\bfill\b|\bcolor\b/i.test(sandboxText)) {
+      problems.push("Styled text needs a style: font, size, or color.");
+    }
+    if (created.length && !textStaysOnPage(sandboxScans)) {
+      problems.push("Inserted text has no positioning or bounds. Read editor.context.insertionParent width and height (use-text.md), fit the font with resize() to that width minus a margin (resize-elements.md), and center it with setPositionInParent using boundsLocal or centerPointLocal (position-elements.md). A fixed font size at the top-left origin runs off the left edge.");
+    }
+  }
+  if (needs.includes("image") && !named(calls, /(^|\.)(addImage|createImage)$/).length) {
+    problems.push("An image needs an addImage() or createImage() call.");
+  }
+  if (needs.includes("panel")) {
+    const tags = html.flatMap((page) => page.tags);
+    if (!tags.some((tag) => tag === "sp-textfield" || tag === "sp-button" || tag === "sp-theme")) {
+      problems.push("A Spectrum form needs a Spectrum Web Component such as sp-textfield or sp-button in the markup, not in a comment.");
+    }
+  }
+  const permissions = manifestPermissions(manifest);
+  if (needs.includes("oauth")) {
+    if (!named(calls, /(^|\.)authorize$/).length) {
+      const opened = named(calls, /(^|\.)open$/).some((item) => item.call.startsWith("window."));
+      problems.push(opened
+        ? "OAuth needs addOnUISdk.app.oauth.authorize(). window.open is not that API."
+        : "OAuth needs an addOnUISdk.app.oauth.authorize() call.");
+    }
+    if (!permissions.oauth.length) {
+      problems.push(permissions.undocumentedTopLevel
+        ? "OAuth needs entryPoints[].permissions.oauth. A top-level permissions key is not in the manifest version 2 schema."
+        : "OAuth needs entryPoints[].permissions.oauth with the provider host.");
+    }
+    const authorizeFiles = new Set(named(calls, /(^|\.)authorize$/).map((item) => item.rel));
+    for (const rel of authorizeFiles) {
+      const file = files.find((item) => path.relative(dir, item.file).split(path.sep).join("/") === rel);
+      if (file && !/\bcatch\b/.test(stripComments(file.text))) problems.push("authorize() needs a catch. An unhandled rejection is not a finished sign-in.");
+    }
+  }
+  if (needs.includes("storage")) {
+    const stores = named(calls, /(^|\.)(getItem|setItem|removeItem)$/);
+    const client = stores.some((item) => /clientStorage/.test(item.call));
+    const local = stores.some((item) => /^localStorage\./.test(item.call));
+    if (!client) problems.push(local ? "Token storage needs addOnUISdk.instance.clientStorage. localStorage is not that API." : "Token storage needs addOnUISdk.instance.clientStorage.");
+  }
+  if (needs.includes("rendition")) {
+    if (!named(calls, /(^|\.)createRenditions$/).length) {
+      const fake = named(calls, /(^|\.)exportPage$/);
+      problems.push(fake.length
+        ? "A page rendition needs addOnUISdk.app.document.createRenditions(). exportPage() is not a document API."
+        : "A page rendition needs an addOnUISdk.app.document.createRenditions() call.");
+    }
+    if (!permissions.sandbox.includes("allow-downloads")) problems.push("A download needs entryPoints[].permissions.sandbox to include allow-downloads.");
+  }
+  if (/\bthrow\b/.test(code) && !/\bcatch\b/.test(code)) problems.push("The code throws and nothing catches it.");
+  const visible = html.some((page) => page.text || page.controls);
+  if (html.length && !visible && (needs.includes("panel") || needs.length)) problems.push("The panel is blank: no text and no control.");
   if (!needs.length) {
     const word = distinctiveWord(brief);
-    if (word && !new RegExp(`\\b${word}\\b`, "i").test(text)) problems.push(`The code does not mention ${word} from the brief.`);
+    if (word && !new RegExp(`\\b${word}\\b`, "i").test(code)) problems.push(`The code does not mention ${word} from the brief.`);
   }
   let built = { ok: true, skipped: true };
   if (build && !problems.length) {
     built = buildProject(dir);
     if (!built.ok) problems.push(built.error || "The add-on did not build.");
   }
-  return { ok: problems.length === 0, problems, needs, build: built };
+  return { ok: problems.length === 0, problems, needs, build: built, permissions };
+}
+
+function textStaysOnPage(scans) {
+  return scans.some((scan) => {
+    const calls = scan.calls || [];
+    if (!calls.some((call) => /(^|\.)createText$/.test(call))) return false;
+    const words = new Set(scan.words || []);
+    const positioned = calls.some((call) => /(^|\.)setPositionInParent$/.test(call));
+    const bounds = words.has("boundsLocal") || words.has("boundsInParent") || words.has("centerPointLocal");
+    const page = words.has("insertionParent") || words.has("artboards") || words.has("currentPage");
+    const fitted = calls.some((call) => /(^|\.)resize$/.test(call)) && page && words.has("width");
+    const fontFromPage = words.has("fontSize") && page && words.has("width");
+    return positioned && bounds && (fitted || fontFromPage);
+  });
 }
 
 export function applyManifestName(dir, name) {
@@ -212,31 +344,52 @@ function sourceFiles(dir) {
   return found;
 }
 
-function isStub(text, dir) {
-  if (/function\s+featureReady\s*\(/.test(text)) return true;
-  if (/id=["']develop-feature["']/.test(text)) return true;
-  const note = fs.existsSync(path.join(dir, "spectrum-note.txt")) || fs.existsSync(path.join(dir, "src", "spectrum-note.txt"));
-  if (note && !/createText\s*\(|addImage\s*\(|createImage\s*\(|<sp-textfield\b/i.test(text)) return true;
-  if (/Create Rectangle/.test(text) && !/createText\s*\(|addImage\s*\(|createImage\s*\(|<sp-textfield\b|<label\b/i.test(text)) return true;
+function isStub(code, html) {
+  if (/function\s+featureReady\s*\(/.test(code)) return true;
+  const markup = html.map((page) => page.tags.join(" ") + page.text).join("\n");
+  if (/develop-feature/.test(code) && /id=["']develop-feature["']/.test(code)) return true;
+  if (html.some((page) => /develop-feature/.test(page.text))) return true;
+  if (/Create Rectangle/.test(markup) && !html.some((page) => page.tags.includes("sp-textfield") || page.tags.includes("label") || /caption/i.test(page.text))) return true;
   return false;
+}
+
+function readManifest(dir) {
+  for (const rel of ["src/manifest.json", "manifest.json"]) {
+    try {
+      return { rel, manifest: JSON.parse(fs.readFileSync(path.join(dir, rel), "utf8")) };
+    } catch {
+      // The other path may hold it.
+    }
+  }
+  return { rel: "", manifest: {} };
+}
+
+function fileRole(rel, manifest) {
+  const names = [];
+  for (const point of manifest.entryPoints || []) if (point.documentSandbox) names.push(String(point.documentSandbox));
+  if (names.some((name) => rel === name || rel.endsWith(`/${name}`))) return "sandbox";
+  if (/\/sandbox\//.test(`/${rel}`) || /(^|\/)code\.(js|ts|mjs)$/.test(rel)) return "sandbox";
+  return "iframe";
+}
+
+/** Permissions live on entryPoints in manifest version 2. A top-level permissions object is not that schema. */
+export function manifestPermissions(manifest) {
+  const oauth = [];
+  const sandbox = [];
+  for (const point of manifest?.entryPoints || []) {
+    const permissions = point?.permissions || {};
+    if (Array.isArray(permissions.oauth)) oauth.push(...permissions.oauth.map((host) => String(host).trim()).filter(Boolean));
+    if (Array.isArray(permissions.sandbox)) sandbox.push(...permissions.sandbox.map((item) => String(item).trim()).filter(Boolean));
+  }
+  return {
+    oauth,
+    sandbox,
+    undocumentedTopLevel: Boolean(manifest?.permissions && typeof manifest.permissions === "object")
+  };
 }
 
 function distinctiveWord(brief) {
   const words = String(brief || "").toLowerCase().match(/\b[a-z][a-z0-9-]{3,}\b/g) || [];
   const skip = new Set(["add", "the", "and", "with", "from", "that", "this", "into", "your", "panel", "field", "feature", "using", "make", "insert"]);
   return words.find((word) => !skip.has(word)) || "";
-}
-
-function manifestAllowsOauth(dir) {
-  for (const rel of ["src/manifest.json", "manifest.json"]) {
-    const file = path.join(dir, rel);
-    if (!fs.existsSync(file)) continue;
-    try {
-      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-      return /oauth/i.test(JSON.stringify(manifest.permissions || {}));
-    } catch {
-      return false;
-    }
-  }
-  return false;
 }

@@ -4,7 +4,7 @@ Asked after the headless audit, on the dashboard or in chat: "Run a real test in
 
 Run does four things, in order:
 
-1. Trust the dev CA, as [sideload.md](sideload.md) describes, and start the add-on's dev server. The only origin that counts is `https://localhost:5241`. The certificate check uses Node's default verification. It never sets `NODE_TLS_REJECT_UNAUTHORIZED` and never uses `--ignore-certificate-errors`.
+1. Trust the dev CA, as [sideload.md](sideload.md) describes, and start the add-on's dev server. The only origin that counts is `https://localhost:5241`. The certificate check uses Node's default verification. It never sets `NODE_TLS_REJECT_UNAUTHORIZED` and never uses `--ignore-certificate-errors`. The server from `ccweb-add-on-scripts` binds `[::1]:5241`. The check probes `[::1]` and `127.0.0.1` and reports which one is listening. Connecting the certificate check to the address that is actually listening does not change the Express address away from `localhost`.
 2. Open a visible browser at `https://new.express.adobe.com`. The person signs in. This skill never reads or types a password, a code, or a cookie.
 3. Guide the clicks: Add-on Development, Your add-ons, Add-on testing, connect to `https://localhost:5241`, Allow the local-network prompt, launch from In development, exercise the feature, capture a screenshot.
 4. Ask `express-result`. The buttons are: the panel rendered and the feature was exercised; it failed or timed out; stop.
@@ -14,6 +14,10 @@ A pass is recorded only when the panel rendered in Express, the feature was exer
 ## Remote machines
 
 A cloud agent, an SSH session, or a container skips the step and records the reason. Nothing is launched and the dev CA is not installed. `EXPRESS_DEVELOP_REMOTE=1` forces that skip. `EXPRESS_DEVELOP_REMOTE=0` is the test override that lets a mocked launch run on a remote machine. A mock still sets `expressPass` to false.
+
+Chrome policy `LoopbackNetworkBlockedForUrls` is a separate skip. When the managed JSON under `/etc/opt/chrome/policies` or `/etc/chromium/policies` blocks loopback, the skip says so, and a failure in that state names the same policy. The skill does not edit the policy and does not add a Chrome security flag.
+
+When that policy blocks localhost, the real Express test is a private link, and only after the person approves it. Run `npm run package`, then `dist.zip`, then Manage add-ons, then the listing, then Private link. A publisher profile is required first, and the logo must be 250x250. Do not create the publisher profile or the listing. That is a manual step. The page is [private-dist.md](../../express-addon-review/references/live/src/pages/guides/build/distribute/private-dist.md).
 
 This repository's cloud-agent VM is remote. A run from that VM must not be called a real Express pass.
 

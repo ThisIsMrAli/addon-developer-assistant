@@ -11,9 +11,16 @@ export const STANDIN_SOURCE = `/**
  */
 console.info("express-sdk-stand-in: not Adobe Express. A browser run is not an Express pass.");
 document.documentElement.dataset.expressSdkStandIn = "express-sdk-stand-in";
-const constants = {
+export const RuntimeType = {
   documentSandbox: "documentSandbox",
-  RuntimeType: { documentSandbox: "documentSandbox", panel: "panel" }
+  panel: "panel",
+  dialog: "dialog"
+};
+export const constants = {
+  RuntimeType,
+  Range: { currentPage: "currentPage", entireDocument: "entireDocument" },
+  RenditionIntent: { preview: "preview", export: "export", print: "print" },
+  RenditionFormat: { png: "png", jpg: "jpg", pdf: "pdf" }
 };
 const sdk = {
   ready: Promise.resolve(),
@@ -23,18 +30,26 @@ const sdk = {
     on() {},
     off() {},
     document: {
-      addImage: async () => ({})
+      addImage: async () => ({ title: "image" }),
+      createRenditions: async () => [{ blob: new Blob(["png"], { type: "image/png" }) }],
+      exportAllowed: async () => true
     },
-    oauth: {}
+    oauth: {
+      authorize: async () => {
+        throw new Error("The OAuth window did not finish.");
+      }
+    }
   },
   instance: {
     runtime: {
+      type: RuntimeType.panel,
       apiProxy: async () => new Proxy({}, { get: () => async () => ({}) }),
       exposeApi() {}
     },
     clientStorage: {
       getItem: async () => null,
-      setItem: async () => {}
+      setItem: async () => {},
+      removeItem: async () => {}
     }
   }
 };

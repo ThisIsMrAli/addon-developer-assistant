@@ -21,6 +21,7 @@ import {
   prepareExpressRun,
   spawnVisible
 } from "./lib/express-host.mjs";
+import { policyFailure, readLoopbackPolicy, resolvePolicyDirs } from "./lib/loopback.mjs";
 import { rememberedOut } from "./lib/paths.mjs";
 import { expressResultAsk } from "./lib/flow.mjs";
 import { patchDevelop, upsertQuestion } from "./lib/session-start.mjs";
@@ -65,7 +66,8 @@ async function run() {
   if (prepared.skipped) {
     patchDevelop(out, {
       expressChecked: true,
-      expressRemote: true,
+      expressRemote: !prepared.policyBlocked || /cgroup|SSH|container|EXPRESS_DEVELOP_REMOTE/.test(prepared.reason),
+      expressPolicy: Boolean(prepared.policyBlocked),
       expressSetup: false,
       expressPass: false,
       expressHostRan: false,
@@ -122,15 +124,18 @@ async function run() {
 }
 
 function blocked(error, exitCode, outcome = "failed") {
+  const told = policyFailure(error, readLoopbackPolicy(resolvePolicyDirs(process.env)));
   patchDevelop(out, {
     expressChecked: true,
     expressRemote: false,
-    expressBlocked: error,
+    expressPolicy: told.includes("LoopbackNetworkBlockedForUrls"),
+    expressBlocked: told,
+    expressReason: told,
     expressPass: false,
     expressHostRan: false,
     expressOutcome: outcome
   });
-  write({ ok: false, recorded: true, expressPass: false, expressHostRan: false, outcome, error });
+  write({ ok: false, recorded: true, expressPass: false, expressHostRan: false, outcome, error: told });
   process.exit(exitCode && exitCode !== 0 ? 0 : 0);
 }
 

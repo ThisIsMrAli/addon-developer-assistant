@@ -11,8 +11,15 @@ export function buildProject(dir) {
   const install = run(dir, ["install", "--no-audit", "--no-fund"]);
   if (install.status !== 0) return { ok: false, error: tail(install) };
   const build = run(dir, ["run", "build"]);
-  if (build.status !== 0) return { ok: false, error: tail(build) };
+  const output = `${build.stdout || ""}\n${build.stderr || ""}`;
+  if (build.status !== 0 || buildReportedError(build.status, output)) return { ok: false, error: tail(build) || "The build reported an error and exited 0." };
   return { ok: true, skipped: false, note: "npm run build finished." };
+}
+
+/** A bundler can print a syntax error and still exit 0. That is a failed build. */
+export function buildReportedError(status, output) {
+  if (status !== 0 && status !== null) return true;
+  return /SyntaxError|Module build failed|Failed to compile|^ERROR in /im.test(String(output || ""));
 }
 
 export function packageProject(dir) {

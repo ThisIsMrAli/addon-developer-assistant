@@ -3,6 +3,7 @@
  * A review session never reaches this. Skip on the BETA Express step goes straight to listing.
  */
 import { briefNeeds } from "./implement.mjs";
+import { loopbackPolicyReason } from "./loopback.mjs";
 
 export const DEVELOP_STEPS = [
   { id: "docs", label: "Fetch the Adobe docs", hint: "Live pages, in parallel, with a time budget. Each page is fresh, stale, or failed." },
@@ -215,8 +216,12 @@ export function developNext(session, { dashboardUp = false } = {}) {
       return { action: "run", command: "node scripts/develop.mjs docs", say: "Fetch the Adobe docs now. The dashboard shows fresh, stale, and failed as the pages return." };
     }
     const counts = session.docs.counts || {};
+    if (session.develop?.docsBlocked || ((counts.failed || 0) > 0 && !(counts.fresh || 0) && !(counts.stale || 0))) {
+      return { action: "finish", command: "node scripts/session.mjs done --summary \"Stopped. The Adobe docs could not be fetched.\"", say: "Every doc page failed. Stop. Do not pick a template." };
+    }
     const failed = counts.failed ? ` ${counts.failed} pages failed. Say that before the next question.` : "";
-    return { action: "run", command: `node scripts/session.mjs step --id docs --status done --detail "${counts.fresh || 0} fresh, ${counts.stale || 0} stale, ${counts.failed || 0} failed"`, say: `The fetch is recorded. Mark the docs step done.${failed}` };
+    const stale = counts.stale ? ` ${counts.stale} pages are stale. Say that. It is not a clean fetch.` : "";
+    return { action: "run", command: `node scripts/session.mjs step --id docs --status done --detail "${counts.fresh || 0} fresh, ${counts.stale || 0} stale, ${counts.failed || 0} failed"`, say: `The fetch is recorded. Mark the docs step done.${stale}${failed}` };
   }
 
   if (open("origin")) {
@@ -227,6 +232,9 @@ export function developNext(session, { dashboardUp = false } = {}) {
   if (open("template")) {
     if (answered("origin")?.answer === "existing") {
       return { action: "run", command: "node scripts/session.mjs step --id template --status skipped --detail \"An existing add-on does not get a template\"", say: "Skip the template step." };
+    }
+    if (session.develop?.templatesFailed) {
+      return { action: "finish", command: "node scripts/session.mjs done --summary \"Stopped. The template list could not be fetched.\"", say: "The template fetch failed. Stop. Do not say the next step is picking a template." };
     }
     if (!session.templates?.ids?.length) {
       return { action: "run", command: "node scripts/develop.mjs templates", say: "Fetch the template names from the CLI package. Do not invent a list. If the fetch fails, stop and say so." };
@@ -311,20 +319,28 @@ export function developNext(session, { dashboardUp = false } = {}) {
     return { action: "run", command: "node scripts/express-run.mjs", say: "Beta real Express. A remote machine skips with a reason. On this computer, trust the dev CA, start https://localhost:5241, and open a visible browser at https://new.express.adobe.com. Do not type credentials. Do not disable Chrome flags. Do not use 127.0.0.1 or ignore-certificate-errors." };
   }
 
-  if (answered("express")?.answer === "run" && (session.develop?.expressRemote || session.develop?.expressBlocked)) {
+  if (answered("express")?.answer === "run" && (session.develop?.expressRemote || session.develop?.expressBlocked || session.develop?.expressPolicy)) {
     if (open("listing") && !published("listing")) return ask("listing");
     if (open("express")) {
-      const remote = Boolean(session.develop?.expressRemote);
-      const detail = remote ? "Remote machine: real Express was not opened" : "Beta check stopped before Express. See express-host.json";
-      const status = remote ? "skipped" : "done";
-      const say = remote
-        ? "This machine is remote, so the beta Express test was skipped. The listing is next."
-        : "The beta check failed before Express. It is not a pass. The listing is next.";
+      const why = `${session.develop?.expressReason || ""} ${session.develop?.expressBlocked || ""}`;
+      const policy = /LoopbackNetworkBlockedForUrls/.test(why);
+      const failed = Boolean(session.develop?.expressBlocked);
+      const status = failed ? "done" : "skipped";
+      const detail = failed
+        ? (policy ? "Failed: Chrome policy LoopbackNetworkBlockedForUrls blocks loopback. Private link: npm run package, dist.zip, Manage add-ons, the listing, Private link. Do not create a publisher profile or a listing." : "Beta check stopped before Express. See express-host.json")
+        : (policy ? "Skipped: Chrome policy LoopbackNetworkBlockedForUrls blocks loopback. Private link: npm run package, dist.zip, Manage add-ons, the listing, Private link. Do not create a publisher profile or a listing." : "Remote machine: real Express was not opened");
+      const say = failed
+        ? (policy
+          ? `The beta check failed because ${loopbackPolicyReason()} Express shows a PORT error. No Chrome security flag is added. It is not a pass. The listing is next.`
+          : "The beta check failed before Express. It is not a pass. The listing is next.")
+        : (policy
+          ? `Skipped. ${loopbackPolicyReason()} The listing is next.`
+          : "This machine is remote, so the beta Express test was skipped. The listing is next.");
       return { action: "run", command: `node scripts/session.mjs step --id express --status ${status} --detail "${detail}"`, say };
     }
   }
 
-  if (answered("express")?.answer === "run" && session.develop?.expressChecked && !session.develop?.expressRemote && !session.develop?.expressBlocked) {
+  if (answered("express")?.answer === "run" && session.develop?.expressChecked && !session.develop?.expressRemote && !session.develop?.expressBlocked && !session.develop?.expressPolicy) {
     if (!answered("express-result")) return ask("express-result");
     if (!session.develop?.expressJudged) {
       return { action: "run", command: "node scripts/express-run.mjs --confirm", say: "Record the beta result. A pass needs the panel rendered in Express, the feature exercised, and a screenshot. A failure or a timeout is recorded as that." };
@@ -351,7 +367,13 @@ function expressOutcome(session) {
   const audit = session.develop?.auditOk === false ? "The audit failed. " : "";
   let expressLine = "The beta Express check did not pass.";
   if (session.develop?.expressPass === true) expressLine = "The beta Express check passed: the panel rendered and the feature was exercised.";
-  else if (express?.status === "skipped") expressLine = "The beta Express check was skipped.";
+  else if (express?.status === "skipped") {
+    expressLine = /LoopbackNetworkBlockedForUrls/.test(`${session.develop?.expressReason || ""} ${session.develop?.expressBlocked || ""}`)
+      ? `The beta Express check was skipped because ${loopbackPolicyReason()}`
+      : "The beta Express check was skipped.";
+  } else if (/LoopbackNetworkBlockedForUrls/.test(`${session.develop?.expressReason || ""} ${session.develop?.expressBlocked || ""}`)) {
+    expressLine = "The beta Express check failed because Chrome policy LoopbackNetworkBlockedForUrls blocks loopback.";
+  }
   return `${audit}${expressLine}`;
 }
 

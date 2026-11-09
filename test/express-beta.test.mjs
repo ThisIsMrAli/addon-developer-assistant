@@ -15,8 +15,13 @@ import {
   remoteReason,
   waitForDevServer
 } from "../.claude/skills/express-addon-develop/scripts/lib/express-host.mjs";
+import { POLICY_ROOTS, resolvePolicyDirs } from "../.claude/skills/express-addon-develop/scripts/lib/loopback.mjs";
 import { readSession } from "../.claude/skills/express-addon-review/scripts/lib/session.mjs";
 import { blockFetch, developCli, drive, expressRunCli, preloadFixtures, run } from "./drive-develop.mjs";
+
+function emptyPolicyDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "policy-empty-"));
+}
 
 function isolatedEnv(out, extra = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "develop-home-"));
@@ -28,6 +33,7 @@ function isolatedEnv(out, extra = {}) {
     EXPRESS_REVIEW_OUT: out,
     EXPRESS_DEVELOP_OUT: out,
     EXPRESS_DEVELOP_KEEP_CACHE: "1",
+    EXPRESS_DEVELOP_POLICY_DIRS: emptyPolicyDir(),
     ...extra
   };
 }
@@ -218,6 +224,7 @@ test("adapter detection prefers Cursor's browser tool, then local Chrome, and ne
   const remote = prepareExpressRun({
     env: { HOME: "/tmp/express-home", CURSOR_AGENT: "1" },
     probe,
+    policyDirs: [emptyPolicyDir()],
     launch() {
       launched += 1;
     }
@@ -230,6 +237,7 @@ test("adapter detection prefers Cursor's browser tool, then local Chrome, and ne
   const cursor = prepareExpressRun({
     env: { HOME: "/tmp/express-home", CURSOR_AGENT: "1", EXPRESS_DEVELOP_REMOTE: "0" },
     probe,
+    policyDirs: [emptyPolicyDir()],
     launch() {
       launched += 1;
     }
@@ -276,7 +284,7 @@ test("the dev server is started with npm start and only https://localhost:5241 c
   });
   assert.equal(ready.trusted, true);
   assert.equal(calls[0].cmd, "npm");
-  assert.deepEqual(calls[0].args, ["start"]);
+  assert.deepEqual(calls[0].args, ["start", "--", "--analytics", "off"]);
   assert.equal(calls[0].options.cwd, "/tmp/addon");
   assert.equal(calls[0].options.env, undefined);
   const timedOut = await waitForDevServer({
@@ -364,3 +372,100 @@ test("choosing run on a remote machine skips Express and still reaches the listi
   assert.equal(finished.develop.expressHostRan, false);
   assert.equal(finished.develop.expressRemote, true);
 });
+
+test("a blocking policy directory changes only the policy outcomes", () => {
+  assert.deepEqual(resolvePolicyDirs({}), POLICY_ROOTS);
+  assert.deepEqual(resolvePolicyDirs({ HOME: "/tmp/express-home" }), POLICY_ROOTS);
+
+  const empty = emptyPolicyDir();
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "policy-block-"));
+  const blocking = ["chrome", "chromium"].map((name) => {
+    const root = path.join(base, name);
+    const file = path.join(root, "managed", "zz-sand-loopback-network.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      LocalNetworkAccessIpAddressSpaceOverrides: ["127.0.0.1:8791=public"],
+      LoopbackNetworkBlockedForUrls: ["*"]
+    }));
+    return root;
+  });
+  const before = fs.readFileSync(path.join(blocking[0], "managed", "zz-sand-loopback-network.json"), "utf8");
+
+  const probe = { cgroup: "0::/system.slice/pod-abc/init", dockerenv: false, containerenv: false };
+  const open = prepareExpressRun({
+    env: { HOME: "/tmp/express-home", CURSOR_AGENT: "1", EXPRESS_DEVELOP_REMOTE: "0" },
+    probe,
+    policyDirs: [empty]
+  });
+  const closed = prepareExpressRun({
+    env: { HOME: "/tmp/express-home", CURSOR_AGENT: "1", EXPRESS_DEVELOP_REMOTE: "0" },
+    probe,
+    policyDirs: blocking
+  });
+  assert.equal(open.skipped, false);
+  assert.equal(open.adapter.id, "cursor-browser");
+  assert.equal(closed.skipped, true);
+  assert.match(closed.reason, /LoopbackNetworkBlockedForUrls/);
+  assert.equal(closed.launched, false);
+  assert.equal(closed.expressPass, false);
+  const hostChanged = ["skipped", "policyBlocked", "reason", "spec", "launchResult"].filter((key) => open[key] !== closed[key] && JSON.stringify(open[key]) !== JSON.stringify(closed[key]));
+  assert.deepEqual(hostChanged.sort(), ["launchResult", "policyBlocked", "reason", "skipped", "spec"]);
+  for (const key of ["launched", "expressPass", "expressHostRan", "origin", "url"]) {
+    assert.equal(closed[key], open[key], key);
+  }
+  assert.equal(closed.adapter.id, open.adapter.id);
+
+  const plain = mockLaunch({});
+  const held = mockLaunch({ EXPRESS_DEVELOP_POLICY_DIRS: blocking.join(path.delimiter) });
+  assert.equal(plain.mock, true);
+  assert.equal(plain.skipped, false);
+  assert.equal(plain.spec.adapter, "local-chrome");
+  assert.equal(held.skipped, true);
+  assert.equal(held.mock, undefined);
+  assert.match(held.reason, /LoopbackNetworkBlockedForUrls/);
+  assert.equal(held.expressPass, false);
+  assert.equal(held.credentials, plain.credentials);
+  const plainShape = launchShape(plain);
+  const heldShape = launchShape(held);
+  const changed = Object.keys(plainShape).filter((key) => plainShape[key] !== heldShape[key]).sort();
+  assert.deepEqual(changed, ["headless", "launched", "mock", "namedPolicy", "policyBlocked", "skipped"]);
+  assert.equal(fs.readFileSync(path.join(blocking[0], "managed", "zz-sand-loopback-network.json"), "utf8"), before);
+});
+
+function launchShape(json) {
+  return {
+    ok: json.ok,
+    skipped: Boolean(json.skipped),
+    policyBlocked: Boolean(json.policyBlocked),
+    launched: Boolean(json.launched),
+    expressPass: json.expressPass,
+    expressHostRan: json.expressHostRan,
+    credentials: json.credentials,
+    mock: json.mock === undefined ? null : json.mock,
+    adapter: json.spec?.adapter || json.adapter?.id || null,
+    url: json.url || null,
+    headless: json.spec ? json.spec.headless : null,
+    namedPolicy: /LoopbackNetworkBlockedForUrls/.test(json.reason || "")
+  };
+}
+
+function mockLaunch(extra) {
+  const chrome = path.join(os.tmpdir(), `fake-chrome-policy-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(chrome, "");
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "develop-out-"));
+  const env = isolatedEnv(out, {
+    EXPRESS_DEVELOP_REMOTE: "0",
+    EXPRESS_DEVELOP_MOCK_LAUNCH: "1",
+    CURSOR_AGENT: "",
+    CURSOR_BROWSER_TOOL: "0",
+    CURSOR_WORKLOAD_CGROUP: "",
+    SSH_CONNECTION: "",
+    SSH_CLIENT: "",
+    CHROME_PATH: chrome,
+    ...extra
+  });
+  assert.equal(run(developCli, ["begin", "--dir", fs.mkdtempSync(path.join(os.tmpdir(), "develop-empty-")), "--name", "Mock", "--brief", "caption", "--out", out], env, [blockFetch]).status, 0);
+  const result = run(expressRunCli, ["--out", out], env);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  return result.json;
+}

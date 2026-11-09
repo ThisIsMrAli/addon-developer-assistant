@@ -14,6 +14,24 @@ export const DEV_PAGES = [
 
 const RAW = "https://raw.githubusercontent.com/AdobeDocs/express-add-ons-docs/main";
 
+/** The how-to pages the brief actually needs, on top of the shared platform pages. */
+export function pagesForBrief(brief) {
+  const text = String(brief || "");
+  const extra = [];
+  const onDocument = /\bdocument sandbox\b|\binto the document\b/i.test(text) || (/\b(document|canvas)\b/i.test(text) && /\b(text|heading|image)\b/i.test(text));
+  if (/\b(heading|headline|styled\s+text|create\s*text)\b/i.test(text) || (onDocument && /\btext\b/i.test(text))) {
+    extra.push(
+      "src/pages/guides/learn/how-to/use-text.md",
+      "src/pages/guides/learn/how-to/position-elements.md",
+      "src/pages/guides/learn/how-to/resize-elements.md"
+    );
+  }
+  if (/\b(image|photo|picture)\b/i.test(text)) extra.push("src/pages/guides/learn/how-to/use-images.md");
+  if (/\boauth\b|\bclientstorage\b|\bdropbox\b/i.test(text)) extra.push("src/pages/guides/learn/how-to/oauth2.md");
+  if (/\b(rendition|createrenditions|download)\b/i.test(text) || (/\bexport\b/i.test(text) && /\b(png|page|document)\b/i.test(text))) extra.push("src/pages/guides/learn/how-to/create-renditions.md");
+  return [...DEV_PAGES, ...extra];
+}
+
 /**
  * Fetch the development pages in parallel.
  * Each page is fresh, stale (a cached copy was kept), or failed.
