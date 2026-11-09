@@ -224,7 +224,8 @@ test("X10 listing pages quote the add-on, and a failed render is not done", () =
     const problems = lintPage({ html, css, templateCss: css, dir: listing });
     assert.deepEqual(problems, [], `${name}: ${problems.join(" ")}`);
     assert.deepEqual(unquotedPhrases(html, addonCorpus(dir)), [], name);
-    assert.doesNotMatch(html, /short phrase from the ui|star\.png|panel-front\.png/i);
+    assert.doesNotMatch(html, /short phrase from the ui|star\.png/i);
+    if (html.includes("panel-front.png")) assert.equal(fs.existsSync(path.join(listing, "panel-front.png")), true);
   }
   const next = developNext({
     mode: "chat",

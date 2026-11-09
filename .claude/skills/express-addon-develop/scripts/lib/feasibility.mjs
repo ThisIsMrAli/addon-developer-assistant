@@ -117,15 +117,24 @@ export function sentenceWith(text, needle) {
   let end = source.length;
   if (endDot >= 0) end = Math.min(end, endDot + 1);
   if (endLine >= 0) end = Math.min(end, endLine);
-  return source.slice(start + 1, end).replace(/\s+/g, " ").trim();
+  let sentence = source.slice(start + 1, end).replace(/\s+/g, " ").trim();
+  if (/createText/.test(String(needle || "")) && /createRectangle\(\)/.test(sentence)) {
+    sentence = sentence.replace(/^[\s\S]*?createRectangle\(\)\s*,?\s*/, "").trim();
+  }
+  return sentence;
 }
 
 /** The dashboard shows this sentence. Markdown and HTML from the doc page are not left in it. */
 export function plainSentence(value) {
   return String(value || "")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
     .replace(/<br\s*\/?>/gi, " ")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&lt;|&gt;|&amp;|&quot;|&#39;|&nbsp;/gi, " ")
     .replace(/`+/g, "")
     .replace(/•/g, " ")
     .replace(/\s+/g, " ")

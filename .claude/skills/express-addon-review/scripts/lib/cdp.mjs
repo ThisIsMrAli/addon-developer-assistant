@@ -20,6 +20,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function launch({ width = 320, height = 800, scale = 2, chrome = findChrome() } = {}) {
   if (!chrome) throw new Error(NO_CHROME);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "express-addon-review-cdp-"));
+  // Chrome writes com.google.Chrome.* and scoped_dir* into TMPDIR. Keep them inside the profile so they die with it.
+  const scratch = path.join(profile, "tmp");
+  fs.mkdirSync(scratch, { recursive: true });
   const args = [
     "--headless=new",
     // Software rendering, so a panel with a WebGL view (3D, charts) draws instead of failing.
@@ -40,7 +43,11 @@ export async function launch({ width = 320, height = 800, scale = 2, chrome = fi
     "about:blank"
   ];
   if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) args.unshift("--no-sandbox");
-  const child = spawn(chrome, args, { stdio: "ignore", detached: process.platform !== "win32" });
+  const child = spawn(chrome, args, {
+    stdio: "ignore",
+    detached: process.platform !== "win32",
+    env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch }
+  });
   child.unref();
 
   const killChrome = () => {
@@ -80,7 +87,7 @@ export async function launch({ width = 320, height = 800, scale = 2, chrome = fi
     const port = await debuggingPort(profile, child);
     const target = await pageTarget(port);
     const socket = await connect(target.webSocketDebuggerUrl);
-    return await makePage(socket, { width, height, scale, profile }, cleanup);
+    return await makePage(socket, { width, height, scale, profile, scratch }, cleanup);
   } catch (error) {
     await cleanup();
     throw error;
@@ -246,7 +253,8 @@ async function makePage(socket, size, cleanup) {
       socket.close();
       await cleanup();
     },
-    profile: size.profile || ""
+    profile: size.profile || "",
+    scratch: size.scratch || ""
   };
   return page;
 }

@@ -88,11 +88,19 @@ test("an image is accepted only when the code inserts one", () => {
   const real = addon({
     "manifest.json": manifest(),
     "index.html": "<!doctype html><html><body><button id=\"insert\">Insert image</button></body></html>\n",
-    "index.js": "await addOnUISdk.app.document.addImage(blob, { title: \"image\" });\n"
+    "code.js": TEXT_INSIDE_PAGE
   });
   const ok = verifyFeature({ dir: real, brief });
   assert.equal(ok.ok, true, ok.problems.join(" "));
   assert.ok(ok.needs.includes("image"));
+  const centered = addon({
+    "manifest.json": manifest(),
+    "index.html": "<!doctype html><html><body><button id=\"insert\">Insert image</button></body></html>\n",
+    "code.js": "export async function addImage(blob) { const page = editor.context.insertionParent; const bitmap = await editor.loadBitmapImage(blob); const image = editor.createImageContainer(bitmap); page.children.append(image); image.setPositionInParent({ x: page.width / 2, y: page.height / 2 }, { x: 0, y: 0 }); }\n"
+  });
+  const covered = verifyFeature({ dir: centered, brief });
+  assert.equal(covered.ok, false);
+  assert.match(covered.problems.join(" "), /boundsInParent|cover|free-space/);
 
   const stub = addon({
     "manifest.json": manifest(),

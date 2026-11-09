@@ -472,12 +472,69 @@ export async function walkPanel({ url, themes = ["light", "dark"], maxStates = 2
       }
     }
     progress({ phase: "done", done: states.length, total: states.length, exact: true, doing: "Finishing" });
+    const actions = await exercisePrimary(page, url);
     // Say what ended the walk, so the report can tell the person whether more time or a higher screen limit would help.
     const truncated = queue.length === 0 ? "" : states.length >= maxStates ? "screens" : "time";
-    return { states, outcome, seen: page.seen, elapsedMs: Date.now() - began, truncated, left: queue.length };
+    return { states, outcome, seen: page.seen, actions, elapsedMs: Date.now() - began, truncated, left: queue.length };
   } finally {
     await page.close();
   }
+}
+
+/** Console lines the add-on prints for an uncaught exception or an unhandled rejection. CDP does not always raise exceptionThrown for those. */
+export function uncaughtMessages(lines) {
+  return [...new Set((lines || []).map((line) => String(line || "")).filter((line) => /uncaught exception|unhandled promise rejection|unhandled rejection/i.test(line)))];
+}
+
+const PRIMARY_SKIP = /^(close|cancel|back|skip)$/i;
+
+/** Presses the panel's first actions and records whether the sandbox API answered. */
+export async function exercisePrimary(page, url) {
+  const actions = [];
+  try {
+    await page.goto(url);
+    await settle(page, 250, 2000);
+    const labels = await page.eval(`(() => {
+      const found = [];
+      const walk = (root) => {
+        const nodes = root.querySelectorAll ? root.querySelectorAll("button, sp-button, [role='button']") : [];
+        for (const el of nodes) {
+          const label = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
+          if (label) found.push(label.slice(0, 80));
+          if (el.shadowRoot) walk(el.shadowRoot);
+        }
+        const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+        for (const el of all) if (el.shadowRoot) walk(el.shadowRoot);
+      };
+      walk(document);
+      return [...new Set(found)].slice(0, 12);
+    })()`);
+    for (const label of (labels || []).filter((label) => label && !PRIMARY_SKIP.test(label) && !RISKY.test(label)).slice(0, 3)) {
+      const before = (page.seen?.exceptions?.length || 0) + (page.seen?.console?.length || 0);
+      const clicked = await page.eval(`(() => {
+        const want = ${JSON.stringify(label)};
+        const walk = (root) => {
+          const nodes = root.querySelectorAll ? root.querySelectorAll("button, sp-button, [role='button']") : [];
+          for (const el of nodes) {
+            const text = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
+            if (text === want) { el.click(); return true; }
+            if (el.shadowRoot && walk(el.shadowRoot)) return true;
+          }
+          const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+          for (const el of all) if (el.shadowRoot && walk(el.shadowRoot)) return true;
+          return false;
+        };
+        return walk(document);
+      })()`);
+      await sleep(300);
+      const lines = [...(page.seen?.exceptions || []), ...(page.seen?.console || [])].slice(before);
+      const error = lines.find((line) => /is not a function|uncaught|unhandled rejection|unhandled promise/i.test(line)) || "";
+      actions.push({ label, ok: Boolean(clicked) && !error, error });
+    }
+  } catch (error) {
+    actions.push({ label: "primary", ok: false, error: String(error?.message || error) });
+  }
+  return actions;
 }
 
 function cap(text) {

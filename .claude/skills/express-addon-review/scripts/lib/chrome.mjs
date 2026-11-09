@@ -42,6 +42,8 @@ export function shoot({ chrome, url, out, width, height, scale = 1, background =
   // profile Chrome 156 can sit on the first-run dialog and never exit, so that attempt
   // is killed with its process group and, if it wrote nothing, retried without a profile.
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "express-addon-review-chrome-"));
+  const scratch = path.join(profile, "tmp");
+  fs.mkdirSync(scratch, { recursive: true });
   fs.writeFileSync(path.join(profile, "First Run"), "");
   fs.rmSync(out, { force: true });
   const shared = [
@@ -61,10 +63,10 @@ export function shoot({ chrome, url, out, width, height, scale = 1, background =
   if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) shared.unshift("--no-sandbox");
   const profileBudget = Math.min(timeout, 8000);
   try {
-    const first = captureOnce(chrome, [...shared, `--user-data-dir=${profile}`, url], out, profileBudget);
+    const first = captureOnce(chrome, [...shared, `--user-data-dir=${profile}`, url], out, profileBudget, scratch);
     if (first === "wrote") return;
     fs.rmSync(out, { force: true });
-    const second = captureOnce(chrome, [...shared, url], out, timeout);
+    const second = captureOnce(chrome, [...shared, url], out, timeout, scratch);
     if (second === "wrote") return;
   } finally {
     try {
@@ -76,8 +78,12 @@ export function shoot({ chrome, url, out, width, height, scale = 1, background =
   throw new Error(`Chrome at ${chrome} cannot run here: it did not write ${out}. It was started with --headless=new --screenshot.`);
 }
 
-function captureOnce(chrome, args, out, timeout) {
-  const child = spawn(chrome, args, { stdio: "ignore", detached: true });
+function captureOnce(chrome, args, out, timeout, scratch) {
+  const child = spawn(chrome, args, {
+    stdio: "ignore",
+    detached: true,
+    env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch }
+  });
   const pid = child.pid;
   const started = Date.now();
   while (Date.now() - started < timeout) {

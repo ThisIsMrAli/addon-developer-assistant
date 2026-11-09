@@ -1,6 +1,13 @@
 // Express add-on review dashboard. No dependencies, no network except this server.
 // Every string from the add-on goes in through textContent, never through innerHTML.
 
+function detailFailed(detail) {
+  const text = String(detail || "")
+    .replace(/\b0\s+failed\b/gi, "")
+    .replace(/\b0\s+errors?\b/gi, "");
+  return /failed|error/i.test(text);
+}
+
 const token = document.body.dataset.token;
 const root = document.getElementById("app");
 const NS = "http://www.w3.org/2000/svg";
@@ -318,7 +325,7 @@ function paintRail() {
     const showDetail = step.detail && ["done", "running", "waiting", "skipped"].includes(step.status);
     const live = step.status === "running";
     const docsWarn = step.id === "docs" && (((session()?.docs?.counts?.stale || 0) + (session()?.docs?.counts?.failed || 0)) > 0);
-    const failedDone = step.status === "done" && /failed|error/i.test(step.detail || "");
+    const failedDone = step.status === "done" && detailFailed(step.detail || "");
     return h("li", { class: "step", "data-status": step.status, "data-warn": docsWarn ? "true" : null, "data-failed": failedDone ? "true" : null, "aria-current": live ? "step" : null },
       h("span", { class: "mark-step" }, docsWarn || failedDone ? icon("alert", 2.4) : step.status === "done" ? icon("check", 3.4) : step.status === "skipped" ? icon("dash", 3) : step.status === "waiting" ? icon("hand", 2.2) : live ? h("span", { class: "spin" }) : null),
       h("div", null,
