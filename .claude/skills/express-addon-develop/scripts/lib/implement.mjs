@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { checkJsSyntax, controlFlow, iframeImageCalls, imageKeepsContentActive, projectPanels, scanHtml, scanJs, storageKinds, stripComments } from "./code-scan.mjs";
+import { checkJsSyntax, controlFlow, iframeImageCalls, imageKeepsContentActive, projectPanels, scanHtml, scanJs, storageKinds, stripComments, sandboxEngineProblems } from "./code-scan.mjs";
 import { placementProblems, sandboxEntry, simulateSandbox } from "./sandbox-sim.mjs";
 import { sandboxApiMismatches } from "./standin.mjs";
 import { buildProject } from "./package-addon.mjs";
@@ -197,7 +197,7 @@ function planHeadings(page, list, columns, blocked) {
       y += size.height + gapFor(size.height);
       break;
     }
-    if (!slots.length || slots.at(-1).entry !== entry) return null;
+    if (!slots.length || slots[slots.length - 1].entry !== entry) return null;
   }
   return slots;
 }
@@ -334,7 +334,7 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
     apis.push({
       api: "editor.loadBitmapImage() and editor.createImageContainer()",
       runtime: "document sandbox",
-      note: "Build the image in the document sandbox. Adobe's Editor reference (keepContentActiveDuringAsync, Example 2, load an image from a Blob) awaits editor.loadBitmapImage(blob), then calls editor.keepContentActiveDuringAsync(insertionParent, async () => {}, afterAsyncCallback). createImageContainer runs in that afterAsyncCallback, not in the open after the await and not inside the async lambda. editor.queueAsyncEdit(callback) is the other accepted form. Give createImageContainer an initialSize with the bitmap's own aspect ratio (bitmap.width and bitmap.height scaled by one factor). Express throws \"Aspect ratio of initialSize must match aspect ratio of bitmapData to within 1%\" otherwise, and the stand-in used by record and the audit throws the same. Fit the image with resize() and place it below the heading column, using boundsInParent, so it does not cover a heading (position-elements.md, resize-elements.md). A later heading continues the same centre line and the image moves down to make room. A centered addImage() covers the heading under it. A panel call such as this._sandboxProxy.addImage(blob) is a sandbox call, not addOnUISdk.app.document.addImage.",
+      note: "Build the image in the document sandbox. Adobe's Editor reference (keepContentActiveDuringAsync, Example 2, load an image from a Blob) awaits editor.loadBitmapImage(blob), then calls editor.keepContentActiveDuringAsync(insertionParent, async () => {}, afterAsyncCallback). createImageContainer runs in that afterAsyncCallback, not in the open after the await and not inside the async lambda. editor.queueAsyncEdit() was removed from the SDK (Adobe changelog 2026-08-03) and is not accepted. The document sandbox runs on QuickJS without the ES2022+ built-ins: no Array.prototype.at, findLast, toSorted, Object.hasOwn, structuredClone or timers. record removes them before it runs the code, and flags each use. Give createImageContainer an initialSize with the bitmap's own aspect ratio (bitmap.width and bitmap.height scaled by one factor). Express throws \"Aspect ratio of initialSize must match aspect ratio of bitmapData to within 1%\" otherwise, and the stand-in used by record and the audit throws the same. Fit the image with resize() and place it below the heading column, using boundsInParent, so it does not cover a heading (position-elements.md, resize-elements.md). A later heading continues the same centre line and the image moves down to make room. A centered addImage() covers the heading under it. A panel call such as this._sandboxProxy.addImage(blob) is a sandbox call, not addOnUISdk.app.document.addImage.",
     });
   }
   if (needs.includes("panel") || (design === "swc" && !needs.includes("oauth"))) {
@@ -420,6 +420,9 @@ export function verifyFeature({ dir, brief, build = true }) {
       problems.push("Styled text needs a style: font, size, or color.");
     }
   }
+  const sandboxFiles = codeFiles.filter((file) => fileRole(file.rel, manifest) === "sandbox");
+  problems.push(...sandboxEngineProblems(sandboxFiles));
+  if (named(sandboxCalls, /(^|\.)queueAsyncEdit$/).length) problems.push("editor.queueAsyncEdit() was removed from the Express document SDK (Adobe changelog 2026-08-03: \"Deprecated APIs (queueAsyncEdit, …) are removed from the SDK\"). In Express it is undefined, so the call throws \"not a function\". Use editor.keepContentActiveDuringAsync(node, async () => {}, afterAsyncCallback) (classes/editor.md).");
   const sandboxMakesText = named(sandboxCalls, /(^|\.)createText$/).length > 0;
   const sandboxImage = named(sandboxCalls, /(^|\.)(createImageContainer|loadBitmapImage)$/).length > 0;
   const iframeImages = iframeImageCalls(codeFiles.filter((file) => fileRole(file.rel, manifest) !== "sandbox"));
@@ -433,7 +436,7 @@ export function verifyFeature({ dir, brief, build = true }) {
     const created = named(calls, /(^|\.)(createImageContainer|loadBitmapImage)$/).length + iframeImages.length;
     if (!created) problems.push("An image needs editor.loadBitmapImage() and editor.createImageContainer() in the document sandbox, or addOnUISdk.app.document.addImage() in the panel.");
     else {
-      if (!imageKeepsContentActive(codeFiles)) problems.push("createImageContainer() has to run in the afterAsyncCallback of editor.keepContentActiveDuringAsync(), as the Editor reference shows for loadBitmapImage (Example 2, load an image from a Blob). The async lambda must not edit the document. editor.queueAsyncEdit() is the other accepted form. Do not call createImageContainer() in the open after await loadBitmapImage().");
+      if (!imageKeepsContentActive(codeFiles)) problems.push("createImageContainer() has to run in the afterAsyncCallback of editor.keepContentActiveDuringAsync(), as the Editor reference shows for loadBitmapImage (Example 2, load an image from a Blob). The async lambda must not edit the document. editor.queueAsyncEdit() was removed from the SDK (Adobe changelog 2026-08-03). Do not call createImageContainer() in the open after await loadBitmapImage().");
       if (iframeImages.length && needs.includes("text")) problems.push(`${iframeImages[0].call}() is the iframe document API. Express centres that image on the page, so it covers the headings. Build the image in the document sandbox (loadBitmapImage, createImageContainer) and place it below the headings with boundsInParent.`);
     }
   }

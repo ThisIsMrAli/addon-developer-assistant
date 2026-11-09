@@ -19,7 +19,7 @@ import { fillListingDir, listingFrom } from "../.claude/skills/express-addon-dev
 import { exposedSandboxMethods, pngBytes, serveWithStandIn, standInSource } from "../.claude/skills/express-addon-develop/scripts/lib/standin.mjs";
 import { prepareDevCa } from "../.claude/skills/express-addon-develop/scripts/lib/ssl-setup.mjs";
 import { uncaughtMessages } from "../.claude/skills/express-addon-review/scripts/lib/audit.mjs";
-import { boxOf, inside, loadSnippet, overlaps } from "./sandbox-harness.mjs";
+import { boxOf, inside, loadSnippet, overlaps, fontSizeOf } from "./sandbox-harness.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const reviewSkill = path.join(root, ".claude/skills/express-addon-review");
@@ -160,7 +160,7 @@ test("NZ6 headings wrap instead of stacking, and an image uses that same slot", 
   for (const box of beforeImage) assert.ok(Math.abs(box.cx - 960) < 1, JSON.stringify(box));
   assert.ok(beforeImage[1].top >= beforeImage[0].bottom - 0.5);
   assert.ok(beforeImage[2].top >= beforeImage[1].bottom - 0.5);
-  assert.ok(mixed.texts().every((node) => node.fontSize <= 72));
+  assert.ok(mixed.texts().every((node) => fontSizeOf(node) <= 72));
   await mixed.api.addImage({ width: 1600, height: 900 });
   mixed.api.addHeading("After");
   const boxes = mixed.nodes().map(boxOf);
@@ -179,7 +179,7 @@ test("NZ6 headings wrap instead of stacking, and an image uses that same slot", 
   const centered = addon({
     "manifest.json": manifest(),
     "index.html": "<!doctype html><html><body><button>Add image</button></body></html>\n",
-    "code.js": "export async function addImage(blob) { const page = editor.context.insertionParent; const bitmap = await editor.loadBitmapImage(blob); const image = editor.createImageContainer(bitmap); page.children.append(image); image.setPositionInParent({ x: page.width / 2, y: page.height / 2 }, { x: 0, y: 0 }); }\n"
+    "code.js": "import { editor } from \"express-document-sdk\";\nexport async function addImage(blob) { const page = editor.context.insertionParent; const bitmap = await editor.loadBitmapImage(blob); const image = editor.createImageContainer(bitmap); page.children.append(image); image.setPositionInParent({ x: page.width / 2, y: page.height / 2 }, { x: 0, y: 0 }); }\n"
   });
   const rejected = verifyFeature({ dir: centered, brief: "Insert an image into the document", build: false });
   assert.equal(rejected.ok, false);

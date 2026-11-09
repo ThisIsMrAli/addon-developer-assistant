@@ -7,6 +7,7 @@ import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
 import { parseSource } from "./code-scan.mjs";
+import { MISSING_GLOBAL_NAMES } from "./sandbox-engine.mjs";
 
 const AsyncFunction = (async () => {}).constructor;
 const quiet = { log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {} };
@@ -94,8 +95,11 @@ function resolveLocal(from, spec) {
 /**
  * Loads a sandbox module (and its local imports) against a document stand-in and returns what it
  * passed to runtime.exposeApi. `text` stands in for the entry file's contents when given.
+ * `strict` (what record uses) runs the code the way Express does: `editor` and `constants` exist only
+ * when imported, and the globals the document sandbox lacks (timers, fetch, structuredClone, …) are
+ * undefined. Tests that load a bare snippet fragment pass `strict: false`.
  */
-export async function loadEntry(entry, doc, text = null) {
+export async function loadEntry(entry, doc, text = null, { strict = false } = {}) {
   const cache = new Map();
   const load = async (file) => {
     if (cache.has(file)) return cache.get(file);
@@ -104,7 +108,8 @@ export async function loadEntry(entry, doc, text = null) {
     const body = toFunctionBody(file, file === entry && text !== null ? text : fs.readFileSync(file, "utf8"));
     // Snippets often use editor/constants without importing them; they read the stand-in's, and a real import shadows them.
     const sdk = doc.modules["express-document-sdk"] || {};
-    const run = new AsyncFunction("__import", "__exports", "console", "editor", "constants", "colorUtils", "fonts", `return (async () => {\n${body}\n})();`);
+    const shadowed = strict ? MISSING_GLOBAL_NAMES : [];
+    const run = new AsyncFunction("__import", "__exports", "console", "editor", "constants", "colorUtils", "fonts", ...shadowed, `return (async () => {\n${body}\n})();`);
     await run(async (spec) => {
       if (doc.modules[spec]) return doc.modules[spec];
       if (spec.startsWith(".")) {
@@ -115,7 +120,7 @@ export async function loadEntry(entry, doc, text = null) {
         return load(found);
       }
       return { default: doc.permissive(spec) };
-    }, exportsObject, quiet, sdk.editor, sdk.constants, sdk.colorUtils, sdk.fonts);
+    }, exportsObject, quiet, ...(strict ? [undefined, undefined, undefined, undefined] : [sdk.editor, sdk.constants, sdk.colorUtils, sdk.fonts]), ...shadowed.map(() => undefined));
     return exportsObject;
   };
   doc.log.entryExports = await load(entry);

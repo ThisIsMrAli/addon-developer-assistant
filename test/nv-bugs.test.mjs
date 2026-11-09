@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { capturedShots } from "./helpers.mjs";
-import { boxOf, inside, loadSnippet, overlaps } from "./sandbox-harness.mjs";
+import { boxOf, inside, loadSnippet, overlaps, fontSizeOf } from "./sandbox-harness.mjs";
 import { findChrome } from "../.claude/skills/express-addon-review/scripts/lib/chrome.mjs";
 import { launch } from "../.claude/skills/express-addon-review/scripts/lib/cdp.mjs";
 import { DEEP_TEXT, exercisePrimary, pressErrorLine, serveFolder, shownStatusError } from "../.claude/skills/express-addon-review/scripts/lib/audit.mjs";
@@ -384,7 +384,7 @@ test("NV14 many headings fill columns left to right, in the order they were adde
   const reading = columns.flatMap((column) => column.nodes.sort((a, b) => boxOf(a).top - boxOf(b).top)).map((node) => node.text);
   assert.deepEqual(reading, texts.map((node) => node.text));
   assert.equal(columns[0].nodes[0].text, "Heading 1");
-  for (const node of texts) assert.ok(node.fontSize >= 18);
+  for (const node of texts) assert.ok(fontSizeOf(node) >= 18);
   const boxes = texts.map(boxOf);
   for (const box of boxes) assert.ok(inside(box, 1920, 1080));
   const middleFirst = mutate("return { centre: margin + width / 2 + column * (width + gutter), width };", "return { centre: margin + width / 2 + ((column + 1) % columns) * (width + gutter), width };");

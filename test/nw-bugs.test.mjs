@@ -11,7 +11,7 @@ import { imageSize } from "../.claude/skills/express-addon-review/scripts/lib/im
 import { startSession } from "../.claude/skills/express-addon-review/scripts/lib/session.mjs";
 import { shownStatusError } from "../.claude/skills/express-addon-review/scripts/lib/audit.mjs";
 import { controlFlow } from "../.claude/skills/express-addon-develop/scripts/lib/code-scan.mjs";
-import { boxOf as harnessBox, loadSnippet } from "./sandbox-harness.mjs";
+import { boxOf as harnessBox, loadSnippet, fontSizeOf } from "./sandbox-harness.mjs";
 import { classifyFeature, plainSentence } from "../.claude/skills/express-addon-develop/scripts/lib/feasibility.mjs";
 import { TEXT_INSIDE_PAGE, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
 import { fillListingDir, listingFrom } from "../.claude/skills/express-addon-develop/scripts/lib/listing-copy.mjs";
@@ -73,7 +73,7 @@ test("NW1 createImageContainer stays inside the documented callback", () => {
   });
   assert.equal(accepted.ok, true, accepted.problems.join(" "));
 
-  const open = `
+  const open = `import { editor } from "express-document-sdk";
 let used = 0;
 function placeImageNode(node, page) {
   node.resize({ width: page.width / 4, height: page.height / 4, behavior: "contain" });
@@ -118,7 +118,9 @@ export async function addImage(blob) {
     brief: "Insert an image into the document",
     build: false
   });
-  assert.equal(viaQueue.ok, true, viaQueue.problems.join(" "));
+  // queueAsyncEdit was removed from the SDK (Adobe changelog 2026-08-03), so it is no longer an accepted form (NP11 strict stand-in).
+  assert.equal(viaQueue.ok, false);
+  assert.match(viaQueue.problems.join(" "), /queueAsyncEdit\(\) was removed from the Express document SDK/);
 });
 
 test("NW2 a sandbox proxy addImage is not the iframe image API", () => {
@@ -154,7 +156,7 @@ test("NW3 and NW11 headings stay aligned, and the sixth stays readable", async (
   const sixNodes = six.run.texts();
   const sixBoxes = sixNodes.map(boxOf);
   assert.equal(sixBoxes.length, 6);
-  for (const node of sixNodes) assert.ok(node.fontSize >= 24, `font ${node.fontSize}`);
+  for (const node of sixNodes) assert.ok(fontSizeOf(node) >= 24, `font ${fontSizeOf(node)}`);
   for (const box of sixBoxes) {
     assert.ok(Math.abs(box.cx - sixBoxes[0].cx) < 1.5, JSON.stringify(box));
     assert.ok(box.left >= -0.5 && box.top >= -0.5 && box.right <= 1920.5 && box.bottom <= 1080.5);
@@ -169,7 +171,7 @@ test("NW3 and NW11 headings stay aligned, and the sixth stays readable", async (
   const headings = first.run.texts();
   const picture = first.run.images()[0];
   assert.equal(headings.length, 3);
-  for (const node of headings) assert.ok(node.fontSize >= 24, `font ${node.fontSize}`);
+  for (const node of headings) assert.ok(fontSizeOf(node) >= 24, `font ${fontSizeOf(node)}`);
   const boxes = first.run.nodes().map(boxOf);
   for (let i = 0; i < boxes.length; i += 1) {
     for (let j = i + 1; j < boxes.length; j += 1) assert.equal(overlaps(boxes[i], boxes[j]), false);
@@ -191,7 +193,7 @@ test("NW3 and NW11 headings stay aligned, and the sixth stays readable", async (
   }
   assert.match(message, /readable size/);
   assert.ok(packed.run.nodes().length < 12);
-  for (const node of packed.run.texts()) assert.ok(node.fontSize >= 18, `font ${node.fontSize}`);
+  for (const node of packed.run.texts()) assert.ok(fontSizeOf(node) >= 18, `font ${fontSizeOf(node)}`);
 
   const mixed = await layout(1920, 1080);
   mixed.api.addHeading("One");
@@ -211,7 +213,7 @@ test("NW3 and NW11 headings stay aligned, and the sixth stays readable", async (
     for (let j = i + 1; j < all.length; j += 1) assert.equal(overlaps(all[i], all[j]), false, `${i} overlaps ${j}`);
     assert.ok(all[i].left >= -0.5 && all[i].top >= -0.5 && all[i].right <= 1920.5 && all[i].bottom <= 1080.5, JSON.stringify(all[i]));
   }
-  for (const node of labels) assert.ok(node.fontSize >= 24, `font ${node.fontSize}`);
+  for (const node of labels) assert.ok(fontSizeOf(node) >= 24, `font ${fontSizeOf(node)}`);
 });
 
 test("NW4 the sudo guard stays until the server process exits", async () => {

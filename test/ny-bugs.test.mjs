@@ -14,7 +14,7 @@ import { CREATE_CCWEB_ADD_ON, MANIFEST_NAME, TEXT_INSIDE_PAGE, applyManifestName
 import { classifyFeature, plainSentence } from "../.claude/skills/express-addon-develop/scripts/lib/feasibility.mjs";
 import { developNext } from "../.claude/skills/express-addon-develop/scripts/lib/flow.mjs";
 import { listingFrom } from "../.claude/skills/express-addon-develop/scripts/lib/listing-copy.mjs";
-import { boxOf, inside, loadSnippet, overlaps } from "./sandbox-harness.mjs";
+import { boxOf, inside, loadSnippet, overlaps, fontSizeOf } from "./sandbox-harness.mjs";
 import { prepareExpressRun } from "../.claude/skills/express-addon-develop/scripts/lib/express-host.mjs";
 import { startDevelopSession, patchDevelop, setStep } from "../.claude/skills/express-addon-develop/scripts/lib/session-start.mjs";
 import { STANDIN_SOURCE, serveWithStandIn } from "../.claude/skills/express-addon-develop/scripts/lib/standin.mjs";
@@ -233,7 +233,7 @@ export function addHeading(heading) {
     const run = await loadSnippet(source, { width: pageW, height: pageH });
     await run.api.addHeading(text);
     const node = run.texts()[0];
-    return { fontSize: node.fontSize, inside: inside(boxOf(node), pageW, pageH) };
+    return { fontSize: fontSizeOf(node), inside: inside(boxOf(node), pageW, pageH) };
   }
   const hi = await place(TEXT_INSIDE_PAGE, 1920, 1080, "Hi");
   assert.ok(hi.fontSize <= 72, `font ${hi.fontSize}`);
@@ -284,7 +284,7 @@ export function addHeading(heading) {
   assert.equal(overlaps(boxes[0], boxes[1]), false);
   for (const box of boxes) assert.ok(inside(box, 1920, 1080), JSON.stringify(box));
   assert.ok(boxes[1].top >= boxes[0].bottom - 0.5);
-  assert.ok(run.texts().every((node) => node.fontSize <= 72));
+  assert.ok(run.texts().every((node) => fontSizeOf(node) <= 72));
 
   // Content already on the page (a selected heading, a shape) is not covered: the next heading goes below it.
   const under = await loadSnippet(TEXT_INSIDE_PAGE, { width: 1920, height: 1080, existing: [{ x: 400, y: 80, width: 1100, height: 96 }] });

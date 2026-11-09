@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **NP11: the snippet no longer calls `Array.prototype.at`.** Heading Image 1.0.5 showed "not a function" on every Add heading and Add image in real Express: `planHeadings()` called `slots.at(-1)`, and the document sandbox's QuickJS has no `.at`. The throw also skipped `headings.pop()`, so every later layout threw too. The snippet now reads `slots[slots.length - 1]`.
+- `record` runs sandbox code the way Express does. The sample-page child removes the built-ins QuickJS added in or after its 2023-12-09 release (`at`, `findLast`, `findLastIndex`, `toSorted`, `toReversed`, `toSpliced`, `with`, `Object.hasOwn`, `Object.groupBy`, `Promise.withResolvers` and the rest), and `structuredClone`, the timers, `fetch`, `WeakRef` and `FinalizationRegistry` are undefined. `editor` and `constants` exist only when imported. Code-scan names each use in a sandbox file, with the reason and a fix, in the source and in a minified build. The browser stand-in reports the same lines to the audit.
+- The document stand-in exposes only the documented API (`references/sandbox-apis.md` lists each call and its reference URL). Any other member is undefined, so a call throws "not a function" as in Express: no permissive `editor.*` or `constants.*` fallbacks, no `ResizeBehavior.fill`, no `rescaleProportionalToWidth`, no settable `fontSize`, no `ItemList.forEach/map/filter`. Node types use the documented `SceneNodeType` values. `editor.queueAsyncEdit()` was removed from the SDK (Adobe changelog 2026-08-03), so it is no longer an accepted form and `record` says so.
+
 ## 0.5.1
 
 - Placement is measured, not pattern-matched. `record` runs the sandbox code in a child Node process against a document stand-in on sample pages (landscape, portrait, square, a locked and an unlocked full-page background, thirty headings, a small page) and checks where every node lands: inside the page and clear of its edge, clear of other added nodes and of existing content, text at 18px or more, images at their bitmap's aspect ratio, one shared column while there is room, and columns that read left to right in the order added. Wrong maths fails whatever it is named, and equivalent maths with other names or argument order passes.

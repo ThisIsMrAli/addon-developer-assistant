@@ -1,15 +1,17 @@
 /** Runs a sandbox snippet against the skill's document stand-in, the same model `record` uses. */
 import os from "node:os";
 import path from "node:path";
-import { createDocument } from "../.claude/skills/express-addon-develop/scripts/lib/document-stand-in.mjs";
+import { createDocument, fontSizeOf, kindOf } from "../.claude/skills/express-addon-develop/scripts/lib/document-stand-in.mjs";
+
+export { fontSizeOf, kindOf };
 import { loadEntry } from "../.claude/skills/express-addon-develop/scripts/lib/sandbox-loader.mjs";
 
 export async function loadSnippet(source, options = {}) {
   const doc = createDocument(options);
-  const exposed = await loadEntry(path.join(os.tmpdir(), "harness-sandbox-code.js"), doc, source);
+  const exposed = await loadEntry(path.join(os.tmpdir(), "harness-sandbox-code.js"), doc, source, { strict: Boolean(options.strict) });
   const api = exposed || doc.log.entryExports || {};
   const nodes = () => doc.page.children.toArray().filter((node) => node.id !== "background" && node.id !== "existing");
-  return { doc, api, page: doc.page, nodes, texts: () => nodes().filter((node) => node.type === "text"), images: () => nodes().filter((node) => node.type === "mediaContainer") };
+  return { doc, api, page: doc.page, nodes, texts: () => nodes().filter((node) => kindOf(node) === "text"), images: () => nodes().filter((node) => kindOf(node) === "image") };
 }
 
 export function boxOf(node) {

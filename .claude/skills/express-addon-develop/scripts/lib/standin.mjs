@@ -3,7 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSource } from "./code-scan.mjs";
+import { parseSource, sandboxEngineProblems } from "./code-scan.mjs";
 
 const SDK_URL = "https://new.express.adobe.com/static/add-on-sdk/sdk.js";
 
@@ -204,11 +204,12 @@ export function sandboxApiMismatches(files, { exposed: known = null } = {}) {
  * panel press runs the add-on's own sandbox code and shows what it really returns or throws.
  * Without a sandbox file, each exposed name answers "" (a sandbox that returns nothing), never an object.
  */
-export function standInSource(methods = [], { sandbox = "" } = {}) {
+export function standInSource(methods = [], { sandbox = "", engine = [] } = {}) {
   const names = [...new Set(methods.filter((name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)))];
   const fallback = names.length ? names : ["createRectangle"];
   const body = `async () => {
         const sandboxUrl = ${JSON.stringify(sandbox)};
+        const engineProblems = ${JSON.stringify(engine)};
         if (sandboxUrl) {
           try {
             await import(sandboxUrl);
@@ -220,6 +221,8 @@ export function standInSource(methods = [], { sandbox = "" } = {}) {
                 if (typeof api[name] !== "function") continue;
                 proxy[name] = async (...args) => {
                   const seen = doc.log.violations.length;
+                  // Express's document sandbox lacks these built-ins, so this code can throw "not a function" there (NP11).
+                  for (const note of engineProblems) console.error("express-sdk-stand-in: the sandbox " + name + "() would fail in Express: " + note);
                   try {
                     return await api[name](...args);
                   } catch (error) {
@@ -352,7 +355,8 @@ export async function serveWithStandIn(sourceDir) {
     fs.writeFileSync(path.join(root, "sandbox-sdk-stand-in.js"), SANDBOX_SDK_STANDIN);
     addImportMap(root);
   }
-  fs.writeFileSync(path.join(root, "sdk-stand-in.js"), standInSource(methods, { sandbox: sandbox ? `./${sandbox}` : "" }));
+  const engine = sandbox ? sandboxEngineProblems([{ rel: sandbox, text: fs.readFileSync(path.join(root, sandbox), "utf8") }]) : [];
+  fs.writeFileSync(path.join(root, "sdk-stand-in.js"), standInSource(methods, { sandbox: sandbox ? `./${sandbox}` : "", engine }));
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";

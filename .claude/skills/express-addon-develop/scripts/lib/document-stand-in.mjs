@@ -11,7 +11,11 @@
  * - createImageContainer: "initialSize ... Must have the same aspect ratio as bitmapData." Express
  *   throws "Aspect ratio of initialSize must match aspect ratio of bitmapData to within 1%".
  * - createImageContainer after `await loadBitmapImage()` belongs in the afterAsyncCallback of
- *   keepContentActiveDuringAsync, or in queueAsyncEdit. An edit outside them is recorded.
+ *   keepContentActiveDuringAsync. An edit outside it is recorded. queueAsyncEdit was removed from the SDK.
+ * - Only the documented surface exists (REFERENCE): editor, context, ItemList, Node, TextNode,
+ *   MediaContainerNode, ArtboardNode, constants, colorUtils and fonts expose the members their
+ *   reference pages list. Any other property is undefined, so calling it throws
+ *   "TypeError: … is not a function", as Express does (NP11).
  * Text is measured as 0.55 × font size per character and 1.2 × font size per line.
  * This file has no imports, so a browser can load it as it is.
  */
@@ -31,60 +35,101 @@ const permissive = (name) => new Proxy(function stub() { return permissive(name)
   apply() { return permissive(`${name}()`); }
 });
 
-function namedConstants() {
-  const named = (keys) => Object.fromEntries(keys.map((key) => [key, key]));
-  const base = {
-    ResizeBehavior: named(["contain", "cover", "proportional", "fill"]),
-    TextAlignment: named(["left", "right", "center", "justifyLeft"]),
-    SceneNodeType: named(["text", "mediaContainer", "rectangle", "ellipse", "group", "artboard", "line", "path", "imageRectangle"]),
-    BlendMode: named(["normal", "multiply", "screen"]),
-    FillType: named(["color"]),
-    StrokePosition: named(["center", "inside", "outside"]),
-    TextType: named(["autoWidth", "autoHeight", "area", "path", "magicFit", "circular"])
-  };
-  return new Proxy(base, {
-    get(target, key) {
-      if (key in target) return target[key];
-      if (typeof key === "symbol") return undefined;
-      return new Proxy({}, { get: (_t, inner) => (typeof inner === "symbol" ? undefined : String(inner)) });
-    }
-  });
+/** Where the documented surface comes from. Every member below is in these pages; anything else is undefined, as in Express. */
+export const REFERENCE = "https://developer.adobe.com/express/add-ons/docs/references/document-sandbox/document-apis";
+
+/**
+ * The enumerations and their members, as the Constants page and each enumeration page list them
+ * (constants/overview.md, enumerations/*.md). A member that is not listed is undefined.
+ */
+export const DOCUMENTED_CONSTANTS = {
+  ArrowHeadType: { none: 0, triangularFilled: 7, openTriangular: 11, circleFilled: 21, squareFilled: 22, circleHollow: 24, squareHollow: 25, verticalLine: 27 },
+  BlendMode: { passThrough: 1, normal: 2, multiply: 3, darken: 4, colorBurn: 5, lighten: 6, screen: 7, colorDodge: 8, overlay: 9, softLight: 10, hardLight: 11, difference: 12, exclusion: 13, hue: 14, saturation: 15, color: 16, luminosity: 17, accumulate: 18 },
+  CreateRenditionFormat: { png: "png", jpeg: "jpeg" },
+  EditorEvent: { selectionChange: "selectionChange" },
+  FillRule: { nonZero: 0, evenOdd: 1 },
+  FillType: { color: "Color" },
+  OrderedListNumbering: { numeric: 1, uppercaseAlpha: 2, lowercaseAlpha: 3, uppercaseRomanNum: 4, lowercaseRomanNum: 5, singleZeroPrefixNumeric: 7, doubleZeroPrefixNumeric: 8 },
+  ParagraphListType: { none: 0, unordered: 1, ordered: 2 },
+  ResizeBehavior: { contain: "contain", cover: "cover", proportional: "proportional" },
+  SceneNodeType: { line: "Line", rectangle: "Rectangle", ellipse: "Ellipse", path: "Path", linkedAsset: "LinkedAsset", group: "Group", artboard: "ab:Artboard", polygon: "artgr:Polygon", artworkRoot: "ArtworkRoot", mediaContainer: "MediaContainer", imageRectangle: "ImageRectangle", unknownMediaRectangle: "UnknownMediaRectangle", page: "Page", complexShape: "ComplexShape", solidColorShape: "SolidColorShape", strokeShape: "StrokeShape", gridCell: "GridCell", gridLayout: "GridLayout", text: "Text" },
+  StrokePosition: { center: 0, inside: 1, outside: 2 },
+  StrokeType: { color: "Color" },
+  TextAlignment: { left: 1, right: 2, center: 3, justifyLeft: 4 },
+  TextLayout: { area: 1, autoHeight: 2, autoWidth: 3, circular: 4, magicFit: 5 },
+  TextScriptStyle: { none: 0, superscript: 1, subscript: 2 },
+  TextStyleSource: { beforeInsertionPoint: 0, afterInsertionPoint: 1, firstReplacedCharacter: 2 },
+  VisualEffectType: { generativeTextEffects: "GenerativeTextEffects", outline: "Outline", shadow: "Shadow", shapeDecoration: "ShapeDecoration" }
+};
+
+/** Enumerations re-exported at the top level of express-document-sdk (constants/overview.md). */
+const TOP_LEVEL_ENUMS = ["ArrowHeadType", "BlendMode", "EditorEvent", "FillRule", "FillType", "ResizeBehavior", "SceneNodeType", "StrokePosition", "StrokeType", "TextAlignment", "TextLayout", "TextScriptStyle", "VisualEffectType"];
+
+function frozenConstants() {
+  const out = {};
+  for (const [name, members] of Object.entries(DOCUMENTED_CONSTANTS)) out[name] = Object.freeze({ ...members });
+  return Object.freeze(out);
 }
+
+const TYPE = DOCUMENTED_CONSTANTS.SceneNodeType;
+
+// Internal state lives on symbols, so add-on code reading `node._parent`, `node.fontSize` or
+// `list._items` gets undefined, as it does in Express.
+const PARENT = Symbol("parent");
+const SIZE = Symbol("size");
+const SCALE = Symbol("scale");
+const ITEMS = Symbol("items");
+const OWNER = Symbol("owner");
+const DROP = Symbol("drop");
+const FONT = Symbol("fontSize");
+const TEXT = Symbol("text");
+const BITMAP = Symbol("bitmap");
+const MEDIA = Symbol("media");
+
+/** Font size the stand-in measured for a text node (not an Express property). */
+export function fontSizeOf(node) { return node ? node[FONT] : undefined; }
+/** "text", "image", or "other", from the documented SceneNodeType values. */
+export function kindOf(node) { return node?.type === TYPE.text ? "text" : node?.type === TYPE.mediaContainer ? "image" : "other"; }
 
 export function createDocument({ width = 1920, height = 1080, background = false, existing = [] } = {}) {
   const log = { created: [], violations: [], errors: [], exposed: null, calls: [] };
   let active = 0;
   let afterAwait = false;
+  let serial = 0;
 
+  // ItemList (classes/item-list.md): length, first, last, append, clear, replace, insertBefore,
+  // insertAfter, indexOf, item, [iterator], toArray, remove, moveBefore, moveAfter.
   class ItemList {
-    constructor(owner) { this._owner = owner; this._items = []; }
-    get length() { return this._items.length; }
-    get first() { return this._items[0]; }
-    get last() { return this._items[this._items.length - 1]; }
-    item(index) { return this._items[index]; }
-    indexOf(node) { return this._items.indexOf(node); }
-    includes(node) { return this._items.includes(node); }
-    toArray() { return this._items.slice(); }
-    forEach(fn) { this._items.slice().forEach(fn); }
-    map(fn) { return this._items.slice().map(fn); }
-    filter(fn) { return this._items.slice().filter(fn); }
-    [Symbol.iterator]() { return this._items.slice()[Symbol.iterator](); }
+    constructor(owner) { this[OWNER] = owner; this[ITEMS] = []; }
+    get length() { return this[ITEMS].length; }
+    get first() { return this[ITEMS][0]; }
+    get last() { return this[ITEMS][this[ITEMS].length - 1]; }
+    item(index) { return this[ITEMS][index]; }
+    indexOf(node) { return this[ITEMS].indexOf(node); }
+    toArray() { return this[ITEMS].slice(); }
+    [Symbol.iterator]() { return this[ITEMS].slice()[Symbol.iterator](); }
     append(...nodes) {
       for (const node of nodes) {
         if (!node || typeof node !== "object") throw new Error("append() needs a node.");
-        if (node.parent && node.parent.children && node.parent.children !== this) node.parent.children._drop(node);
-        this._drop(node);
-        this._items.push(node);
-        node._parent = this._owner;
+        const old = node[PARENT];
+        if (old && old.children && old.children !== this) old.children[DROP](node);
+        this[DROP](node);
+        this[ITEMS].push(node);
+        node[PARENT] = this[OWNER];
       }
     }
-    insertAfter(node, after) { this._drop(node); const at = this._items.indexOf(after); this._items.splice(at < 0 ? this._items.length : at + 1, 0, node); node._parent = this._owner; }
-    insertBefore(node, before) { this._drop(node); const at = this._items.indexOf(before); this._items.splice(at < 0 ? 0 : at, 0, node); node._parent = this._owner; }
-    remove(...nodes) { for (const node of nodes) { this._drop(node); node._parent = null; } }
-    clear() { for (const node of this._items) node._parent = null; this._items = []; }
-    _drop(node) { const at = this._items.indexOf(node); if (at >= 0) this._items.splice(at, 1); }
+    insertAfter(node, after) { this[DROP](node); const at = this[ITEMS].indexOf(after); this[ITEMS].splice(at < 0 ? this[ITEMS].length : at + 1, 0, node); node[PARENT] = this[OWNER]; }
+    insertBefore(node, before) { this[DROP](node); const at = this[ITEMS].indexOf(before); this[ITEMS].splice(at < 0 ? 0 : at, 0, node); node[PARENT] = this[OWNER]; }
+    moveAfter(node, after) { this.insertAfter(node, after); }
+    moveBefore(node, before) { this.insertBefore(node, before); }
+    replace(oldNode, newNode) { const at = this[ITEMS].indexOf(oldNode); if (at < 0) return; this[ITEMS].splice(at, 1, newNode); oldNode[PARENT] = null; newNode[PARENT] = this[OWNER]; }
+    remove(...nodes) { for (const node of nodes) { this[DROP](node); node[PARENT] = null; } }
+    clear() { for (const node of this[ITEMS]) node[PARENT] = null; this[ITEMS] = []; }
+    [DROP](node) { const at = this[ITEMS].indexOf(node); if (at >= 0) this[ITEMS].splice(at, 1); }
   }
 
+  // Node (classes/node.md, visual-node.md): the accessors and methods listed there, nothing else.
+  // rescaleProportionalToWidth/Height and a settable fontSize are not in the reference and are absent.
   class Node {
     constructor(type) {
       this.type = type;
@@ -92,22 +137,38 @@ export function createDocument({ width = 1920, height = 1080, background = false
       this.rotation = 0;
       this.locked = false;
       this.opacity = 1;
-      this._parent = null;
-      this.id = `${type}-${log.created.length + 1}`;
+      this.blendMode = DOCUMENTED_CONSTANTS.BlendMode.normal;
+      this.addOnData = {};
+      this[PARENT] = null;
+      serial += 1;
+      this.id = `${type}-${serial}`;
     }
-    get parent() { return this._parent; }
-    get _size() { return { width: 0, height: 0 }; }
-    get boundsLocal() { const size = this._size; return { x: 0, y: 0, width: size.width, height: size.height }; }
+    get parent() { return this[PARENT]; }
+    get [SIZE]() { return { width: 0, height: 0 }; }
+    get boundsLocal() { const size = this[SIZE]; return { x: 0, y: 0, width: size.width, height: size.height }; }
     get centerPointLocal() { const box = this.boundsLocal; return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }
     get topLeftLocal() { return { x: 0, y: 0 }; }
     get boundsInParent() { const box = this.boundsLocal; return { x: this.translation.x + box.x, y: this.translation.y + box.y, width: box.width, height: box.height }; }
+    get rotationInScreen() { return this.rotation; }
+    get transformMatrix() { return [1, 0, 0, 1, this.translation.x, this.translation.y]; }
+    get visualRoot() { let at = this; while (at[PARENT] && at[PARENT].type !== TYPE.page) at = at[PARENT]; return at; }
+    get allChildren() { return this.children ? this.children.toArray() : []; }
+    get allDescendants() { const out = []; const visit = (node) => { for (const child of node.allChildren) { out.push(child); visit(child); } }; visit(this); return out; }
+    get allTextContent() { return []; }
+    boundsInNode() { return this.boundsLocal; }
+    localPointInNode(point) { return point; }
+    hasDescendant(node) { return this.allDescendants.includes(node); }
+    async createRendition() { return []; }
     setPositionInParent(parentPoint, localRegistrationPoint) {
       const point = parentPoint || { x: 0, y: 0 };
       const ref = localRegistrationPoint || { x: 0, y: 0 };
       this.translation = { x: Number(point.x) - Number(ref.x || 0), y: Number(point.y) - Number(ref.y || 0) };
     }
-    removeFromParent() { if (this._parent && this._parent.children) this._parent.children.remove(this); }
-    _scale() {}
+    setRotationInParent(angle) { this.rotation = Number(angle) || 0; }
+    removeFromParent() { const parent = this[PARENT]; if (parent && parent.children) parent.children.remove(this); }
+    cloneInPlace() { throw new Error("cloneInPlace() is not modelled by the document stand-in."); }
+    [SCALE]() {}
+    // resize (node.md, ResizeOptions): width and/or height with contain/cover, or proportional with one of them.
     resize(geometry = {}) {
       const box = this.boundsLocal;
       if (!box.width || !box.height) return;
@@ -118,50 +179,63 @@ export function createDocument({ width = 1920, height = 1080, background = false
       else if (Number.isFinite(w)) scale = w / box.width;
       else if (Number.isFinite(h)) scale = h / box.height;
       else return;
-      if (scale > 0 && Number.isFinite(scale)) this._scale(scale, geometry);
+      if (scale > 0 && Number.isFinite(scale)) this[SCALE](scale, geometry);
     }
-    rescaleProportionalToWidth(w) { this.resize({ width: w }); }
-    rescaleProportionalToHeight(h) { this.resize({ height: h }); }
   }
 
   class TextNode extends Node {
     constructor(text) {
-      super("text");
-      this._text = String(text ?? "");
-      this.fontSize = 100;
+      super(TYPE.text);
+      this[TEXT] = String(text ?? "");
+      this[FONT] = 100;
       const self = this;
+      // TextContentModel (classes/text-content-model.md).
       this.fullContent = {
-        get text() { return self._text; },
-        set text(value) { self._text = String(value ?? ""); },
-        get characterStyleRanges() { return [{ start: 0, length: self._text.length, fontSize: self.fontSize }]; },
-        set characterStyleRanges(ranges) { const size = Array.isArray(ranges) && ranges[0] && Number(ranges[0].fontSize); if (size > 0) self.fontSize = size; },
-        applyCharacterStyles(style = {}) { const size = Number(style.fontSize); if (size > 0) self.fontSize = size; },
+        id: `${this.id}-content`,
+        get text() { return self[TEXT]; },
+        set text(value) { self[TEXT] = String(value ?? ""); },
+        get characterStyleRanges() { return [{ start: 0, length: self[TEXT].length, fontSize: self[FONT] }]; },
+        set characterStyleRanges(ranges) { const size = Array.isArray(ranges) && ranges[0] && Number(ranges[0].fontSize); if (size > 0) self[FONT] = size; },
+        get paragraphStyleRanges() { return [{ start: 0, length: self[TEXT].length }]; },
+        set paragraphStyleRanges(_ranges) {},
+        applyCharacterStyles(style = {}) { const size = Number(style.fontSize); if (size > 0) self[FONT] = size; },
         applyParagraphStyles() {},
-        paragraphStyleRanges: []
+        appendText(value) { self[TEXT] += String(value ?? ""); },
+        insertText(value, index = 0) { const t = self[TEXT]; self[TEXT] = t.slice(0, index) + String(value ?? "") + t.slice(index); },
+        replaceText(value, range = {}) { const t = self[TEXT]; const start = Number(range.start) || 0; self[TEXT] = t.slice(0, start) + String(value ?? "") + t.slice(start + (Number(range.length) || 0)); },
+        deleteText(range = {}) { const t = self[TEXT]; const start = Number(range.start) || 0; self[TEXT] = t.slice(0, start) + t.slice(start + (Number(range.length) || 0)); },
+        hasUnavailableFonts() { return false; }
       };
-      this.textAlignment = "left";
+      this.textAlignment = DOCUMENTED_CONSTANTS.TextAlignment.left;
+      this.layout = { type: DOCUMENTED_CONSTANTS.TextLayout.autoWidth };
+      this.visualEffects = [];
+      this.nextTextNode = undefined;
     }
-    get text() { return this._text; }
-    set text(value) { this._text = String(value ?? ""); }
-    get _size() {
-      const lines = this._text.split("\n");
+    get text() { return this[TEXT]; }
+    set text(value) { this[TEXT] = String(value ?? ""); }
+    isStandaloneText() { return true; }
+    isThreadedText() { return false; }
+    get [SIZE]() {
+      const lines = this[TEXT].split("\n");
       const longest = Math.max(1, ...lines.map((line) => line.length));
-      return { width: 0.55 * this.fontSize * longest, height: 1.2 * this.fontSize * lines.length };
+      return { width: 0.55 * this[FONT] * longest, height: 1.2 * this[FONT] * lines.length };
     }
-    _scale(scale) { this.fontSize *= scale; }
+    [SCALE](scale) { this[FONT] *= scale; }
   }
 
   class MediaContainerNode extends Node {
-    constructor(w, h) { super("mediaContainer"); this._w = w; this._h = h; }
-    get _size() { return { width: this._w, height: this._h }; }
-    get mediaRectangle() { return { width: this._w, height: this._h }; }
-    _scale(scale) { this._w *= scale; this._h *= scale; }
+    constructor(w, h) { super(TYPE.mediaContainer); this[MEDIA] = { w, h }; }
+    get [SIZE]() { return { width: this[MEDIA].w, height: this[MEDIA].h }; }
+    get mediaRectangle() { return { width: this[MEDIA].w, height: this[MEDIA].h, type: TYPE.imageRectangle }; }
+    get maskShape() { return { width: this[MEDIA].w, height: this[MEDIA].h, type: TYPE.rectangle }; }
+    replaceMedia() {}
+    [SCALE](scale) { this[MEDIA].w *= scale; this[MEDIA].h *= scale; }
   }
 
   class ShapeNode extends Node {
     constructor(type) { super(type); this.width = 100; this.height = 100; this.fill = null; this.stroke = null; }
-    get _size() { return { width: Number(this.width) || 0, height: Number(this.height) || 0 }; }
-    _scale(scale, geometry) {
+    get [SIZE]() { return { width: Number(this.width) || 0, height: Number(this.height) || 0 }; }
+    [SCALE](scale, geometry) {
       if (geometry && geometry.behavior !== "contain" && Number.isFinite(Number(geometry.width)) && Number.isFinite(Number(geometry.height))) {
         this.width = Number(geometry.width);
         this.height = Number(geometry.height);
@@ -173,8 +247,8 @@ export function createDocument({ width = 1920, height = 1080, background = false
   }
 
   class GroupNode extends Node {
-    constructor() { super("group"); this.children = new ItemList(this); }
-    get _size() {
+    constructor() { super(TYPE.group); this.children = new ItemList(this); }
+    get [SIZE]() {
       let right = 0;
       let bottom = 0;
       for (const child of this.children) { const box = child.boundsInParent; right = Math.max(right, box.x + box.width); bottom = Math.max(bottom, box.y + box.height); }
@@ -182,17 +256,22 @@ export function createDocument({ width = 1920, height = 1080, background = false
     }
   }
 
+  // ArtboardNode (classes/artboard-node.md): children, fill, width, height and the VisualNode members.
   class ArtboardNode extends Node {
-    constructor(w, h) { super("artboard"); this.width = w; this.height = h; this.children = new ItemList(this); this.fill = null; }
-    get _size() { return { width: this.width, height: this.height }; }
+    constructor(w, h) { super(TYPE.artboard); this.width = w; this.height = h; this.children = new ItemList(this); this.fill = null; }
+    get [SIZE]() { return { width: this.width, height: this.height }; }
   }
 
   const page = new ArtboardNode(width, height);
-  const pageNode = { type: "page", width, height, artboards: new ItemList(null), name: "Page 1" };
+  // PageNode / ActivePageNode (classes/active-page-node.md): artboards, width, height, name.
+  const pageNode = { type: TYPE.page, width, height, name: "Page 1", id: "page-1", addOnData: {} };
+  pageNode.artboards = new ItemList(pageNode);
   pageNode.artboards.append(page);
-  page._parent = pageNode;
+  pageNode.parent = undefined;
+  pageNode.removeFromParent = () => {};
+  pageNode.hasDescendant = (node) => page === node || page.hasDescendant(node);
   if (background) {
-    const back = new ShapeNode("rectangle");
+    const back = new ShapeNode(TYPE.rectangle);
     back.width = width;
     back.height = height;
     back.locked = background === "unlocked" ? false : true;
@@ -200,41 +279,52 @@ export function createDocument({ width = 1920, height = 1080, background = false
     page.children.append(back);
   }
   for (const item of existing) {
-    const node = new ShapeNode("rectangle");
+    const node = new ShapeNode(TYPE.rectangle);
     node.width = item.width;
     node.height = item.height;
     node.translation = { x: item.x, y: item.y };
+    node.locked = Boolean(item.locked);
     node.id = item.id || "existing";
     page.children.append(node);
   }
 
   const track = (node) => { log.created.push(node); return node; };
+  const pages = { first: pageNode, last: pageNode, length: 1, item: (index) => (index === 0 ? pageNode : undefined), indexOf: (node) => (node === pageNode ? 0 : -1), [Symbol.iterator]: () => [pageNode][Symbol.iterator](), toArray: () => [pageNode] };
+  const documentRoot = { type: "ExpressRoot", id: "root", pages, addOnData: {} };
+  // Editor / ExpressEditor (classes/editor.md, express-editor.md). queueAsyncEdit was removed from
+  // the SDK (references/changelog.md, 2026-08-03), so it is absent here too.
+  const context = {
+    get insertionParent() { return page; },
+    get currentPage() { return pageNode; },
+    get selection() { return []; },
+    get selectionIncludingNonEditable() { return []; },
+    get hasSelection() { return false; },
+    on() { return "handler-1"; },
+    off() {}
+  };
   const editor = {
-    context: {
-      get insertionParent() { return page; },
-      get currentPage() { return pageNode; },
-      get selection() { return []; },
-      get hasSelection() { return false; },
-      get documentRoot() { return editor.documentRoot; }
-    },
-    documentRoot: { pages: { first: pageNode, length: 1, item: () => pageNode, [Symbol.iterator]: () => [pageNode][Symbol.iterator](), toArray: () => [pageNode] } },
+    get context() { return context; },
+    get documentRoot() { return documentRoot; },
     createText(text) { return track(new TextNode(text)); },
-    createRectangle() { return track(new ShapeNode("rectangle")); },
-    createEllipse() { const node = new ShapeNode("ellipse"); node.rx = 50; node.ry = 50; return track(node); },
-    createLine() { return track(new ShapeNode("line")); },
-    createPath() { return track(new ShapeNode("path")); },
+    createThreadedText(text) { return track(new TextNode(text)); },
+    createRectangle() { return track(new ShapeNode(TYPE.rectangle)); },
+    createEllipse() { const node = new ShapeNode(TYPE.ellipse); node.rx = 50; node.ry = 50; return track(node); },
+    createLine() { return track(new ShapeNode(TYPE.line)); },
+    createPath() { return track(new ShapeNode(TYPE.path)); },
     createGroup() { return track(new GroupNode()); },
-    makeColorFill(color) { return { type: "color", color }; },
-    makeStroke(options) { return { type: "stroke", ...(options || {}) }; },
+    makeColorFill(color) { return { type: DOCUMENTED_CONSTANTS.FillType.color, color }; },
+    makeStroke(options) { return { type: DOCUMENTED_CONSTANTS.StrokeType.color, ...(options || {}) }; },
     async loadBitmapImage(blob) {
       log.calls.push("loadBitmapImage");
       const size = await bitmapSize(blob);
       afterAwait = true;
-      return { width: size.width, height: size.height, _bitmap: true };
+      const bitmap = { width: size.width, height: size.height, async data() { return blob; } };
+      Object.defineProperty(bitmap, BITMAP, { value: true });
+      return bitmap;
     },
     createImageContainer(bitmap, options = {}) {
-      if (!bitmap || !bitmap._bitmap) throw new Error("createImageContainer needs the BitmapImage that loadBitmapImage returned.");
-      if (afterAwait && !active) log.violations.push("createImageContainer ran after await loadBitmapImage() outside keepContentActiveDuringAsync's afterAsyncCallback or queueAsyncEdit.");
+      if (!bitmap || !bitmap[BITMAP]) throw new Error("createImageContainer needs the BitmapImage that loadBitmapImage returned.");
+      if (afterAwait && !active) log.violations.push("createImageContainer ran after await loadBitmapImage() outside keepContentActiveDuringAsync's afterAsyncCallback.");
       let w = bitmap.width;
       let h = bitmap.height;
       const size = options && options.initialSize;
@@ -246,10 +336,6 @@ export function createDocument({ width = 1920, height = 1080, background = false
         h = Number(size.height);
       }
       return track(new MediaContainerNode(w, h));
-    },
-    async queueAsyncEdit(callback) {
-      active += 1;
-      try { return await callback(); } finally { active -= 1; }
     },
     async keepContentActiveDuringAsync(_node, lambda, after) {
       if (typeof lambda === "function") {
@@ -263,39 +349,37 @@ export function createDocument({ width = 1920, height = 1080, background = false
       }
     }
   };
-  const editorProxy = new Proxy(editor, {
-    get(target, key) {
-      if (key in target) return target[key];
-      if (typeof key === "symbol") return undefined;
-      return permissive(`editor.${String(key)}`);
-    }
-  });
-  const constants = namedConstants();
+  const constants = frozenConstants();
+  // colorUtils (classes/color-utils.md): fromRGB, fromHex, toHex.
   const colorUtils = {
     fromRGB: (red, green, blue, alpha = 1) => (typeof red === "object" ? { alpha: 1, ...red } : { red, green, blue, alpha }),
     fromHex: (hex) => ({ hex: String(hex), red: 0, green: 0, blue: 0, alpha: 1 }),
     toHex: () => "#000000ff"
   };
-  const fonts = new Proxy({
+  // Fonts (classes/fonts.md): fromPostscriptName.
+  const fonts = {
     async fromPostscriptName(name) { return { postscriptName: String(name), availableForEditing: true, family: String(name), style: "Regular" }; }
-  }, { get: (target, key) => (key in target ? target[key] : typeof key === "symbol" ? undefined : permissive(`fonts.${String(key)}`)) });
+  };
+  const viewport = { bringIntoView() {}, fitToScreen() {} };
   const runtime = {
     type: "documentSandbox",
     exposeApi(api) { log.exposed = api; return api; },
     apiProxy: async () => permissive("panel")
   };
   const sandboxSdk = { instance: { runtime }, __standIn: STAND_IN_LABEL };
+  const sdkExports = { editor, constants, Constants: constants, colorUtils, fonts, viewport };
+  for (const name of TOP_LEVEL_ENUMS) sdkExports[name] = constants[name];
   return {
     label: STAND_IN_LABEL,
     page,
-    editor: editorProxy,
+    editor,
     constants,
     colorUtils,
     fonts,
     runtime,
     log,
     modules: {
-      "express-document-sdk": { editor: editorProxy, constants, colorUtils, fonts, default: { editor: editorProxy, constants, colorUtils, fonts } },
+      "express-document-sdk": { ...sdkExports, default: { ...sdkExports } },
       "add-on-sdk-document-sandbox": { default: sandboxSdk, ...sandboxSdk }
     },
     permissive

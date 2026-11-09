@@ -4,8 +4,14 @@
  * so `express-document-sdk` and `add-on-sdk-document-sandbox` resolve to the document stand-in.
  */
 import fs from "node:fs";
-import { createDocument } from "./document-stand-in.mjs";
-import { loadEntry } from "./sandbox-loader.mjs";
+import { createDocument, fontSizeOf, kindOf } from "./document-stand-in.mjs";
+import { loadEntry as looseLoad } from "./sandbox-loader.mjs";
+import { stripNewerBuiltins } from "./sandbox-engine.mjs";
+
+// Express's document sandbox runs on a QuickJS without Array.prototype.at and the rest (sandbox-engine.mjs).
+// This child only runs add-on sandbox code, so the built-ins are removed for the whole process (NP11).
+const REMOVED = stripNewerBuiltins();
+const loadEntry = (entry, doc) => looseLoad(entry, doc, null, { strict: true });
 
 function readInput() {
   return JSON.parse(fs.readFileSync(0, "utf8"));
@@ -27,12 +33,12 @@ function snapshot(doc, owned, bitmaps) {
     const ours = owned.has(node);
     return {
       id: node.id,
-      kind: node.type === "text" ? "text" : node.type === "mediaContainer" ? "image" : "other",
+      kind: kindOf(node),
       ours,
       order: ours ? owned.get(node) : -1,
       background: node.id === "background",
-      text: node.type === "text" ? node.text : undefined,
-      fontSize: node.type === "text" ? node.fontSize : undefined,
+      text: kindOf(node) === "text" ? node.text : undefined,
+      fontSize: kindOf(node) === "text" ? fontSizeOf(node) : undefined,
       bitmap: bitmaps.get(node),
       x: box.x, y: box.y, w: box.width, h: box.height
     };
@@ -43,7 +49,7 @@ async function probe(entry, method, arg, kind) {
   const doc = createDocument({ width: 1920, height: 1080 });
   const api = await loadEntry(entry, doc);
   const before = doc.log.created.length;
-  const made = () => doc.log.created.slice(before).some((node) => node.type === kind) || (kind === "mediaContainer" && doc.log.calls.includes("loadBitmapImage"));
+  const made = () => doc.log.created.slice(before).some((node) => kindOf(node) === kind) || (kind === "image" && doc.log.calls.includes("loadBitmapImage"));
   try {
     await withTimeout(api[method](arg), 3000, `${method}()`);
   } catch (error) {
@@ -69,7 +75,7 @@ async function main() {
       if (asObject.ok) { methods.heading = name; methods.headingArg = "object"; continue; }
     }
     if (!methods.image) {
-      const asImage = await probe(entry, name, imageBlob("1600x900"), "mediaContainer");
+      const asImage = await probe(entry, name, imageBlob("1600x900"), "image");
       if (asImage.ok) methods.image = name;
       else if (asImage.error && /image|bitmap|aspect/i.test(asImage.error)) imageProbeError = asImage.error;
     }
@@ -98,11 +104,11 @@ async function main() {
       } catch (error) {
         threw = String(error?.message || error);
       }
-      const fresh = doc.page.children.toArray().filter((node) => !before.has(node) && (node.type === "text" || node.type === "mediaContainer"));
+      const fresh = doc.page.children.toArray().filter((node) => !before.has(node) && kindOf(node) !== "other");
       for (const node of fresh) {
         order += 1;
         owned.set(node, order);
-        if (node.type === "mediaContainer") {
+        if (kindOf(node) === "image") {
           const [w, h] = value.split("x").map(Number);
           bitmaps.set(node, { width: w, height: h });
         }
@@ -112,7 +118,7 @@ async function main() {
     }
     results.push({ ...scenario, steps, violations: [...new Set(doc.log.violations)] });
   }
-  process.stdout.write(`${JSON.stringify({ ok: true, exposed, methods, imageProbeError, scenarios: results })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, exposed, methods, imageProbeError, engine: { removed: REMOVED }, scenarios: results })}\n`);
 }
 
 main().catch((error) => {

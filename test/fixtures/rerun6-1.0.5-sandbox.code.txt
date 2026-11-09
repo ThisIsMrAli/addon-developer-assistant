@@ -1,0 +1,205 @@
+import addOnSandboxSdk from "add-on-sdk-document-sandbox";
+import { editor, constants } from "express-document-sdk";
+
+const { runtime } = addOnSandboxSdk.instance;
+
+const FULL_MESSAGE = "The page is full. This stays at a readable size, so it was not added.";
+const MIN_TEXT_HEIGHT = Math.round(24 * 1.2);
+const MIN_IMAGE_SIDE = 64;
+const MAX_COLUMNS = 3;
+const IMAGE_GAP = 12;
+const headings = [];
+const images = [];
+
+function marginOf(page) {
+  return Math.round(Math.min(page.width, page.height) * 0.08);
+}
+
+function gapFor(height) {
+  return Math.max(8, Math.round(Math.max(height, 1) * 0.15));
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.width - 0.5 && a.x + a.width > b.x + 0.5 && a.y < b.y + b.height - 0.5 && a.y + a.height > b.y + 0.5;
+}
+
+function onThisPage(node, page) {
+  const parent = node.parent;
+  return Boolean(parent) && (parent === page || (parent.id !== undefined && parent.id === page.id));
+}
+
+function isBackground(item, page) {
+  if (item.locked) return true;
+  const box = item.boundsInParent;
+  return box.width >= page.width * 0.95 && box.height >= page.height * 0.95;
+}
+
+function obstacles(page, ours) {
+  const blocked = [];
+  for (const item of page.children) {
+    if (ours.has(item) || !item.boundsInParent || isBackground(item, page)) continue;
+    blocked.push(item.boundsInParent);
+  }
+  return blocked;
+}
+
+function scaledSize(entry, maxWidth, maxHeight) {
+  const scale = Math.min(1, maxWidth / entry.width, maxHeight / entry.height);
+  return { width: entry.width * scale, height: entry.height * scale };
+}
+
+function columnCentre(page, columns, column) {
+  const margin = marginOf(page);
+  const usable = page.width - margin * 2;
+  const gutter = columns > 1 ? Math.round(usable * 0.04) : 0;
+  const width = (usable - gutter * (columns - 1)) / columns;
+  return { centre: margin + width / 2 + column * (width + gutter), width };
+}
+
+function planHeadings(page, list, columns, blocked) {
+  const margin = marginOf(page);
+  const bottom = page.height - margin;
+  const slots = [];
+  let column = 0;
+  let y = margin;
+  for (const entry of list) {
+    let { centre, width } = columnCentre(page, columns, column);
+    const size = scaledSize(entry, width, bottom - margin);
+    if (size.height < Math.min(entry.height, MIN_TEXT_HEIGHT) - 0.5) return null;
+    for (let guard = 0; guard < 200; guard += 1) {
+      const rect = { x: centre - size.width / 2, y, width: size.width, height: size.height };
+      if (rect.y + rect.height > bottom + 0.5) {
+        column += 1;
+        if (column >= columns) return null;
+        ({ centre, width } = columnCentre(page, columns, column));
+        y = margin;
+        continue;
+      }
+      const hit = blocked.find((box) => rectsOverlap(rect, box));
+      if (hit) {
+        y = hit.y + hit.height + gapFor(size.height);
+        continue;
+      }
+      slots.push({ entry, rect });
+      y += size.height + gapFor(size.height);
+      break;
+    }
+    if (!slots.length || slots.at(-1).entry !== entry) return null;
+  }
+  return slots;
+}
+
+function planImages(page, list, top, alone, blocked) {
+  const margin = marginOf(page);
+  const bottom = page.height - margin;
+  const usable = page.width - margin * 2;
+  const slots = [];
+  if (!list.length) return slots;
+  const share = (bottom - top - IMAGE_GAP * (list.length - 1)) / list.length;
+  const tallest = alone ? Math.min(share, (page.height - margin * 2) * 0.5) : share;
+  let y = top;
+  for (const entry of list) {
+    if (tallest <= 0) return null;
+    const size = scaledSize(entry, usable, tallest);
+    if (Math.min(size.width, size.height) < Math.min(MIN_IMAGE_SIDE, entry.width, entry.height) - 0.5) return null;
+    let placed = null;
+    for (let guard = 0; guard < 200 && !placed; guard += 1) {
+      const rect = { x: page.width / 2 - size.width / 2, y, width: size.width, height: size.height };
+      if (rect.y + rect.height > bottom + 0.5) return null;
+      const hit = blocked.find((box) => rectsOverlap(rect, box));
+      if (hit) y = hit.y + hit.height + IMAGE_GAP;
+      else placed = rect;
+    }
+    if (!placed) return null;
+    slots.push({ entry, rect: placed });
+    y = placed.y + placed.height + IMAGE_GAP;
+  }
+  return slots;
+}
+
+/** Headings fill one centred column, then columns left to right. Images go below the headings. */
+function layout(page) {
+  const texts = headings.filter((entry) => onThisPage(entry.node, page));
+  const pictures = images.filter((entry) => onThisPage(entry.node, page));
+  const ours = new Set([...texts, ...pictures].map((entry) => entry.node));
+  const blocked = obstacles(page, ours);
+  for (let columns = 1; columns <= MAX_COLUMNS; columns += 1) {
+    const textSlots = planHeadings(page, texts, columns, blocked);
+    if (!textSlots) continue;
+    const top = textSlots.length ? Math.max(...textSlots.map((slot) => slot.rect.y + slot.rect.height)) + IMAGE_GAP : marginOf(page);
+    const imageSlots = planImages(page, pictures, top, !textSlots.length, blocked);
+    if (!imageSlots) continue;
+    return textSlots.concat(imageSlots);
+  }
+  return null;
+}
+
+function apply(slots) {
+  for (const { entry, rect } of slots) {
+    const node = entry.node;
+    const box = node.boundsLocal;
+    if (Math.abs(box.width - rect.width) > 0.5 || Math.abs(box.height - rect.height) > 0.5) {
+      node.resize({
+        width: rect.width,
+        height: rect.height,
+        behavior: constants.ResizeBehavior.contain,
+        avoidScalingVisualDetailsIfPossible: false
+      });
+    }
+    const fitted = node.boundsLocal;
+    const anchor = node.centerPointLocal || { x: fitted.x + fitted.width / 2, y: fitted.y + fitted.height / 2 };
+    node.setPositionInParent({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, anchor);
+  }
+}
+
+export function addHeading(heading) {
+  const text = String(heading ?? "").trim();
+  if (!text) return "Type a heading first.";
+  const page = editor.context.insertionParent;
+  const node = editor.createText(text);
+  page.children.append(node);
+  const cap = Math.min(72, Math.round(page.width / 16));
+  node.fullContent.applyCharacterStyles(
+    { fontSize: cap, color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
+    { start: 0, length: text.length }
+  );
+  const box = node.boundsLocal;
+  headings.push({ node, width: box.width, height: box.height });
+  const slots = layout(page);
+  if (!slots) {
+    headings.pop();
+    node.removeFromParent();
+    return FULL_MESSAGE;
+  }
+  apply(slots);
+  return "";
+}
+
+export async function addImage(blob) {
+  const page = editor.context.insertionParent;
+  const bitmap = await editor.loadBitmapImage(blob);
+  const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
+  const initialSize = { width: bitmap.width * scale, height: bitmap.height * scale };
+  let message = FULL_MESSAGE;
+  await editor.keepContentActiveDuringAsync(
+    page,
+    async () => {},
+    () => {
+      const image = editor.createImageContainer(bitmap, { initialSize });
+      page.children.append(image);
+      images.push({ node: image, width: initialSize.width, height: initialSize.height });
+      const slots = layout(page);
+      if (!slots) {
+        images.pop();
+        image.removeFromParent();
+        message = FULL_MESSAGE;
+        return;
+      }
+      apply(slots);
+      message = "";
+    }
+  );
+  return message;
+}
+
+if (typeof runtime !== "undefined") runtime.exposeApi({ addHeading, addImage });

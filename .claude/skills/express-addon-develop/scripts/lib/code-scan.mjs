@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { engineUses } from "./sandbox-engine.mjs";
 
 const ID_START = /[A-Za-z_$]/;
 const ID_CHAR = /[A-Za-z0-9_$]/;
@@ -399,7 +400,7 @@ function enclosingFn(stack, idOf) {
 
 /**
  * createImageContainer must run in the documented afterAsyncCallback (the third argument of
- * keepContentActiveDuringAsync), or in a queueAsyncEdit callback. The callback may be written inline,
+ * keepContentActiveDuringAsync). queueAsyncEdit was removed from the SDK (changelog 2026-08-03). The callback may be written inline,
  * or passed by name (`const afterLoad = () => {…}; keep…(page, async () => {}, afterLoad)`).
  */
 function insideKeptEdit(stack, ast) {
@@ -419,7 +420,7 @@ function insideKeptEdit(stack, ast) {
 
 function keptSlot(call, arg) {
   const name = calleeName(call.callee);
-  if (name === "queueAsyncEdit") return call.arguments[0] === arg;
+  // queueAsyncEdit was removed from the SDK (Adobe changelog 2026-08-03), so it no longer counts.
   if (name === "keepContentActiveDuringAsync") return call.arguments[2] === arg;
   return false;
 }
@@ -435,13 +436,32 @@ function passedByName(ast, name) {
   let found = false;
   walk(ast, (node) => {
     if (found || node.type !== "CallExpression") return;
-    const slot = calleeName(node.callee) === "queueAsyncEdit" ? node.arguments?.[0] : calleeName(node.callee) === "keepContentActiveDuringAsync" ? node.arguments?.[2] : null;
+    const slot = calleeName(node.callee) === "keepContentActiveDuringAsync" ? node.arguments?.[2] : null;
     if (slot?.type === "Identifier" && slot.name === name) found = true;
   });
   return found;
 }
 
-/** createImageContainer must run in the documented afterAsyncCallback, or in queueAsyncEdit. */
+/**
+ * Built-ins and globals the Express document sandbox does not have (sandbox-engine.mjs), used in
+ * document sandbox files. Each problem names the file, the line, why it fails in Express, and a fix.
+ */
+export function sandboxEngineProblems(files) {
+  const problems = [];
+  for (const file of files) {
+    const rel = file.rel || file.file || "";
+    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(rel)) continue;
+    const parsed = parseSource(rel, String(file.text || ""));
+    if (!parsed.ast) continue;
+    for (const use of engineUses(parsed.ast, walk)) {
+      const call = use.owner && !/^[a-z]/.test(use.owner) && ["Object", "Map", "Promise", "Error", "RegExp", "Math"].includes(use.owner) ? `${use.owner}.${use.name}()` : use.owner ? `.${use.name}()` : `${use.name}()`;
+      problems.push(`${rel}:${use.line} calls ${call} in the document sandbox. ${use.reason}${use.fix ? ` Fix: ${use.fix}.` : ""}`);
+    }
+  }
+  return [...new Set(problems)];
+}
+
+/** createImageContainer must run in the documented afterAsyncCallback of keepContentActiveDuringAsync. */
 export function imageKeepsContentActive(files) {
   let saw = false;
   let bad = false;
@@ -516,7 +536,7 @@ export function iframeImageCalls(files) {
       }
       return current;
     };
-    const isDocument = (chain) => Boolean(chain && chain.length && chain.at(-1) === "document");
+    const isDocument = (chain) => Boolean(chain && chain.length && chain[chain.length - 1] === "document");
     walk(parsed.ast, (node) => {
       if (node.type !== "CallExpression") return;
       const callee = node.callee;
@@ -526,7 +546,7 @@ export function iframeImageCalls(files) {
       }
       if (callee?.type === "Identifier" && methods.has(callee.name)) {
         const chain = resolve(methods.get(callee.name));
-        if (IFRAME_IMAGE.has(chain.at(-1)) && isDocument(chain.slice(0, -1))) found.push({ rel, call: callee.name });
+        if (IFRAME_IMAGE.has(chain[chain.length - 1]) && isDocument(chain.slice(0, -1))) found.push({ rel, call: callee.name });
       }
     });
   }
