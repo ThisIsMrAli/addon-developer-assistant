@@ -53,6 +53,7 @@ test("an empty folder becomes a real template that builds, packages, and passes 
   const zip = readZip(session.develop.zip);
   assert.ok(zip.entries.some((entry) => entry.name === "manifest.json"), zip.entries.map((entry) => entry.name).join(", "));
   const html = fs.readFileSync(path.join(dir, "src/index.html"), "utf8");
-  assert.match(html, /develop-feature/);
+  assert.match(html, /caption-field/);
+  assert.doesNotMatch(html, /develop-feature|function featureReady/);
   console.log(`e2e template=${session.asks.find((item) => item.id === "template")?.answer} bugs=0 screens=${browser.audit.screens}`);
 });

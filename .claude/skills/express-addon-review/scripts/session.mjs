@@ -149,7 +149,7 @@ async function wait(out) {
   const session = readSession(out);
   const info = readServer(out);
   if (session.mode === "dashboard") {
-    if (!info) return print({ status: "server-down", id: args.id, next: "Ask this in chat with AskQuestion, then record it with the answer command." });
+    if (!info) return print({ status: "server-down", id: args.id, next: "The dashboard is not running. Start it with `node scripts/dashboard.mjs start`, then run this wait again. If start fails, ask in chat with AskQuestion and record the answer." });
     try {
       const res = await fetch(`http://127.0.0.1:${info.port}/api/wait?id=${encodeURIComponent(args.id)}&timeout=${seconds}`, {
         headers: { authorization: `Bearer ${info.token}` },
@@ -160,7 +160,7 @@ async function wait(out) {
       if (body.status === "answered") noteDelivered(out, args.id, body.label, body.via);
       return print(body, body.status === "answered" ? out : undefined);
     } catch {
-      return print({ status: "server-down", id: args.id, next: "Ask this in chat with AskQuestion, then record it with the answer command." });
+      return print({ status: "server-down", id: args.id, next: "The dashboard is not running. Start it with `node scripts/dashboard.mjs start`, then run this wait again. If start fails, ask in chat with AskQuestion and record the answer." });
     }
   }
   const end = Date.now() + seconds * 1000;

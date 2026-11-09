@@ -11,17 +11,25 @@ export const STANDIN_SOURCE = `/**
  */
 console.info("express-sdk-stand-in: not Adobe Express. A browser run is not an Express pass.");
 document.documentElement.dataset.expressSdkStandIn = "express-sdk-stand-in";
+const constants = {
+  documentSandbox: "documentSandbox",
+  RuntimeType: { documentSandbox: "documentSandbox", panel: "panel" }
+};
 const sdk = {
   ready: Promise.resolve(),
+  constants,
   app: {
     ui: { theme: "light" },
     on() {},
     off() {},
-    document: {}
+    document: {
+      addImage: async () => ({})
+    },
+    oauth: {}
   },
   instance: {
     runtime: {
-      apiProxy: async () => ({}),
+      apiProxy: async () => new Proxy({}, { get: () => async () => ({}) }),
       exposeApi() {}
     },
     clientStorage: {
@@ -30,6 +38,7 @@ const sdk = {
     }
   }
 };
+export { constants };
 export default sdk;
 `;
 
@@ -73,7 +82,10 @@ export async function serveWithStandIn(sourceDir) {
     url: `http://127.0.0.1:${port}/${entry}`,
     label: "express-sdk-stand-in",
     expressPass: false,
-    close: () => new Promise((resolve) => server.close(() => resolve()))
+    close: () => new Promise((resolve) => server.close(() => {
+      fs.rmSync(root, { recursive: true, force: true });
+      resolve();
+    }))
   };
 }
 

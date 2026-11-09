@@ -11,14 +11,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { reminder } from "../../express-addon-review/scripts/lib/next.mjs";
 import { readMerged } from "../../express-addon-review/scripts/lib/session.mjs";
-import { trustDevcert } from "./lib/devcert.mjs";
+import { caPath, trustDevcert } from "./lib/devcert.mjs";
 import {
   checkTrusted,
   defaultProbe,
+  identifyDevServer,
   judgeExpress,
+  openDevServer,
   prepareExpressRun,
-  spawnVisible,
-  waitForDevServer
+  spawnVisible
 } from "./lib/express-host.mjs";
 import { rememberedOut } from "./lib/paths.mjs";
 import { expressResultAsk } from "./lib/flow.mjs";
@@ -75,15 +76,19 @@ async function run() {
     return;
   }
 
-  let setup = { ok: true, executed: false, skipped: true };
   let server = { ok: true, skipped: true, trusted: true };
   if (!mock) {
-    setup = trustDevcert({ home: process.env.HOME, exec: true });
-    fs.writeFileSync(path.join(out, "express-setup.json"), `${JSON.stringify(setup, null, 2)}\n`);
-    if (!setup.ok) return blocked(setup.error || "The dev CA was not trusted.", setup.exitCode || 1);
     const session = readMerged(out);
-    server = await waitForDevServer({ cwd: session?.addon?.path, check: checkTrusted });
-    if (!server.trusted) return blocked(server.error || "https://localhost:5241 did not become trusted.", 0, server.outcome || "timeout");
+    const home = process.env.HOME;
+    server = await openDevServer({
+      cwd: session?.addon?.path,
+      caReady: () => fs.existsSync(caPath(home || "")),
+      trust: () => trustDevcert({ home, exec: true }),
+      check: checkTrusted,
+      identify: (origin) => identifyDevServer(origin, manifestName(session))
+    });
+    fs.writeFileSync(path.join(out, "express-setup.json"), `${JSON.stringify(server.setup || { ok: false }, null, 2)}\n`);
+    if (!server.ok || !server.trusted) return blocked(server.error || "https://localhost:5241 did not become this add-on.", 0, server.outcome || "timeout");
   }
 
   let opened = prepared.launchResult;
@@ -129,10 +134,33 @@ function blocked(error, exitCode, outcome = "failed") {
   process.exit(exitCode && exitCode !== 0 ? 0 : 0);
 }
 
+function manifestName(session) {
+  const dir = session?.addon?.path || "";
+  for (const rel of ["src/manifest.json", "manifest.json"]) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, rel), "utf8")).name || session?.addon?.name || "";
+    } catch {
+      // The other path may hold the manifest.
+    }
+  }
+  return session?.addon?.name || "";
+}
+
+function dashboardUp(dir) {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(dir, "server.json"), "utf8"));
+    if (!info?.pid) return false;
+    process.kill(info.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
 function write(body) {
   fs.writeFileSync(path.join(out, "express-host.json"), `${JSON.stringify(body, null, 2)}\n`);
   const printed = { ...body };
-  printed.next = reminder(out);
+  printed.next = reminder(out, { dashboardUp: dashboardUp(out) });
   process.stdout.write(`${JSON.stringify(printed)}\n`);
 }
 

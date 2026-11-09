@@ -56,17 +56,23 @@ test("an existing add-on is not edited before the gate, then gains a caption and
   answer(env, out, "implement", "write");
   const wrote = run(developCli, ["implement", "--out", out], env);
   assert.equal(wrote.status, 0, wrote.stdout + wrote.stderr);
-  const html = fs.readFileSync(htmlPath, "utf8");
-  assert.match(html, /id="develop-feature"/);
-  assert.match(html, />Caption</);
-  assert.match(html, /iframe runtime|user interface/i);
+  assert.equal(wrote.json.awaitingAgent, true);
+  assert.equal(fs.readFileSync(htmlPath, "utf8"), before);
+  const html = before.includes("</body>")
+    ? before.replace("</body>", `<label for="caption-field">Caption</label>\n<input id="caption-field" name="caption" type="text" />\n</body>`)
+    : `${before}\n<label for="caption-field">Caption</label>\n`;
+  fs.writeFileSync(htmlPath, html);
+  const recorded = run(developCli, ["record", "--out", out], env);
+  assert.equal(recorded.status, 0, recorded.stdout + recorded.stderr);
+  assert.match(fs.readFileSync(htmlPath, "utf8"), /caption-field/);
+  assert.doesNotMatch(fs.readFileSync(htmlPath, "utf8"), /develop-feature/);
 
   assert.equal(run(developCli, ["build", "--out", out], env).status, 0);
   const packed = run(developCli, ["package", "--out", out], env);
   assert.equal(packed.status, 0, packed.stdout + packed.stderr);
   const zip = readZip(packed.json.zip);
   assert.ok(zip.entries.some((entry) => entry.name === "manifest.json"));
-  assert.match(zip.read("index.html"), /develop-feature/);
+  assert.match(zip.read("index.html"), /caption-field/);
 });
 
 function answer(env, out, id, value) {

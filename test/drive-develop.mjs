@@ -114,11 +114,22 @@ export function drive(out, env, { imports = [], audit = "skip", answers = {} } =
       patchDevelop(out, { audited: true, standIn: "express-sdk-stand-in", expressPass: false, auditBugs: [] });
       continue;
     }
+    if (action.action === "awaiting-agent-implementation") writeCaption(out);
     assert.ok(action.command, JSON.stringify(action));
     const ran = runSpoken(out, action.command, env, imports);
     assert.equal(ran.status, 0, `${action.command}\n${ran.stdout}\n${ran.stderr}`);
   }
   assert.fail(`the session did not finish: ${actions.join(" > ")}`);
+}
+
+function writeCaption(out) {
+  const session = JSON.parse(fs.readFileSync(path.join(out, "session.json"), "utf8"));
+  const dir = session.addon.path;
+  const htmlPath = fs.existsSync(path.join(dir, "src/index.html")) ? path.join(dir, "src/index.html") : path.join(dir, "index.html");
+  const html = fs.readFileSync(htmlPath, "utf8");
+  if (html.includes("caption-field")) return;
+  const block = `<label for="caption-field">Caption</label>\n<input id="caption-field" name="caption" type="text" />\n`;
+  fs.writeFileSync(htmlPath, html.includes("</body>") ? html.replace("</body>", `${block}</body>`) : `${html}\n${block}`);
 }
 
 function defaultAnswer(id, out) {

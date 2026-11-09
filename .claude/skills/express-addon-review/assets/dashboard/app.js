@@ -303,12 +303,13 @@ function paintTop() {
 
 function visibleSteps() {
   const s = session();
+  if (s?.kind === "develop") return steps();
   return steps().filter((step) => step.status !== "skipped" || (step.id === "access" && s?.needsCredential));
 }
 
 function paintRail() {
   const list = visibleSteps();
-  const counted = list.filter((step) => step.status !== "skipped");
+  const counted = session()?.kind === "develop" ? list : list.filter((step) => step.status !== "skipped");
   const doneCount = counted.filter((step) => step.status === "done").length;
   region(el.railHead, `${doneCount}/${counted.length}`, () => [h("p", { class: "eyebrow", text: "Workflow" }), h("b", { text: `${doneCount} of ${counted.length}` })]);
   const key = JSON.stringify(list.map((step) => [step.id, step.status, step.detail, step.progress, step.startedAt, step.endedAt]));
@@ -394,7 +395,8 @@ function paintHero() {
   const waiting = steps().find((step) => step.status === "waiting");
   const next = steps().find((step) => step.status === "pending" && step.id !== "done");
   const feed = [...(s?.log || [])].slice(-4).reverse();
-  const tone = !s ? "idle" : finished() ? "ok" : pending ? "wait" : running ? "work" : "idle";
+  const cleanFinish = finished() && !/was skipped|did not pass|audit failed/i.test(s?.summary || "");
+  const tone = !s ? "idle" : finished() ? (cleanFinish ? "ok" : "idle") : pending ? "wait" : running ? "work" : "idle";
   const current = pending ? waiting : running || next;
   const index = current ? list.findIndex((step) => step.id === current.id) + 1 : 0;
   const key = JSON.stringify([tone, current && [current.id, current.status, current.doing, current.detail, current.progress, current.startedAt], pending && pending.id, feed.map((entry) => entry.at + entry.text), s?.summary, agent && [agent.tone, agent.label.replace(/\(.*\)|, last update.*/, "")], d.bugsOpen.length, d.errors.length]);
@@ -475,10 +477,12 @@ function paintStats() {
   const done = list.filter((step) => step.status === "done").length;
   const audit = s?.audit;
   const counts = s?.docs?.counts;
+  const panelShots = (s?.shots || []).filter((shot) => shot.kind === "panel");
+  const walked = s?.develop?.auditScreens || panelShots.length;
   const tiles = s?.kind === "develop" ? [
     { tone: "work", icon: "doc", k: "Docs", v: counts ? String(counts.fresh + counts.stale + counts.failed) : "–", s: counts ? `${counts.fresh} fresh, ${counts.stale} stale, ${counts.failed} failed` : "Not fetched yet" },
-    { tone: s?.develop?.implemented ? "ok" : "work", icon: "layers", k: "Files written", v: Array.isArray(s?.develop?.files) ? s.develop.files.length : (s?.develop?.implemented ? "Yes" : "No"), s: "Nothing is written before you approve" },
-    { tone: "work", icon: "bug", k: "Panel walk", v: s?.develop?.audited ? (s.develop.auditBugs || []).length : "–", s: s?.develop?.standIn ? "SDK stand-in. Not an Express pass." : "Not walked yet" },
+    { tone: s?.develop?.implemented ? "ok" : "work", icon: "layers", k: "Files written", v: Array.isArray(s?.develop?.files) ? String(s.develop.files.length) : (s?.develop?.implemented ? "Yes" : "No"), s: s?.develop?.implemented ? "Verified and recorded" : "Nothing is written before you approve" },
+    { tone: "work", icon: "bug", k: "Panel walk", v: s?.develop?.audited ? String(walked || "–") : "–", s: panelShots.length ? `${panelShots.length} captures. SDK stand-in, not an Express pass.` : (s?.develop?.audited ? "Walked. SDK stand-in, not an Express pass." : "Not walked yet") },
     { tone: "work", icon: "layers", k: "Steps done", v: `${done}/${list.length}`, s: s?.startedAt ? "Running for " : "", since: s?.startedAt }
   ] : [
     { tone: d.errors.length ? "bad" : "ok", icon: d.errors.length ? "x" : "check", k: "Code errors", v: d.errors.length, s: d.total ? `${d.fixed.length} of ${d.total} findings fixed` : "From the scan" },
@@ -550,7 +554,7 @@ function turn(ask) {
     sync();
     await load();
   } }, list, secretBox,
-  h("div", { class: "actions" }, submit, h("span", { class: "hint", text: "The agent carries on the moment you confirm. You can also answer in chat." })), status);
+  h("div", { class: "actions" }, submit, h("span", { class: "hint", text: "The agent carries on the moment you confirm." })), status);
 
   const s = session();
   const shots = (ask.images || []).map((id) => s.shots.find((shot) => shot.id === id)).filter(Boolean);

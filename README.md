@@ -22,7 +22,7 @@ The adapter is detected, not assumed. Cursor's built-in browser is used when tha
 
 The check you run on an Adobe Express add-on before you submit it. Point it at the add-on folder. It checks the source against Adobe’s current docs, walks the panel at 320px in light and dark, fixes the layout bugs it measures, and prepares the marketplace listing.
 
-It does not open Adobe Express, it does not submit the add-on, and a finished review is not marketplace approval. Adobe’s sentences stay on Adobe’s pages. The refresh command downloads the docs, and a check is skipped when that download no longer contains the sentence it depends on.
+Add-on Preflight does not open Adobe Express and does not submit the add-on. A finished review is not marketplace approval. The develop flow has a separate beta step that can open Express, and skip is the default. Adobe’s sentences stay on Adobe’s pages. The refresh command downloads the docs, and a check is skipped when that download no longer contains the sentence it depends on.
 
 ## Requirements
 
@@ -45,10 +45,10 @@ That links both skills into the agent folders on this machine, including Claude,
 `npx skills add` copies each skill directory on its own. Install both, into the same parent, or the develop skill cannot see Add-on Review:
 
 ```bash
-npx skills add <owner>/express-addon-review --skill express-addon-review --skill express-addon-develop
+npx skills add ThisIsMrAli/addon-developer-assistant --skill express-addon-review --skill express-addon-develop
 ```
 
-If you were sent the preview address instead of the repository, download the project from that page. The repository itself is private.
+The GitHub repository is private. `npx skills add` works only when you have access. It does not make the repository public. If you were sent the preview address instead, download the project from that page.
 
 ## Run a review
 
@@ -85,7 +85,7 @@ The local dashboard shows the current step, a progress bar, the findings, and th
 ## What it will not do
 
 - Submit the add-on, or claim that Adobe will approve it
-- Open Adobe Express or sign in
+- Open Adobe Express from a Preflight review, or sign in. The develop beta step can open Express, and only after you choose Run. Skip is the default, and this project never takes a password
 - Invent listing text, publisher details, or test credentials
 - Ask once per finding
 

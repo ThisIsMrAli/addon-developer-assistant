@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { buildProject } from "./package-addon.mjs";
 
 const ANSWERED = new Set(["origin", "feasibility", "design", "implement"]);
 
@@ -64,45 +65,111 @@ export function scaffoldProject({ dir, template }) {
 }
 
 /**
- * Write the feature the feasibility answer allowed.
- * The comment cites a sentence that is present in `evidence`, which the caller took from a fetched page.
+ * What the brief needs the agent to call. This does not write the add-on.
+ * Text and images in the document use the document sandbox. A Spectrum form is panel UI.
+ * Network and OAuth need manifest permissions.
  */
-export function applyFeature({ dir, feature, design, evidence, page, brief }) {
-  if (feature === "unsupported") {
-    return { written: false, files: [], note: "Unsupported. No project file was changed." };
+export function briefNeeds(brief) {
+  const text = String(brief || "");
+  const needs = [];
+  if (/\b(styled\s+text|create\s*text|add\s+(?:styled\s+)?text|heading|headline)\b/i.test(text)) needs.push("text");
+  if (/\b(image|photo|picture)\b/i.test(text)) needs.push("image");
+  if (/\b(spectrum|sp-textfield|sp-button)\b/i.test(text) || (/\bform\b/i.test(text) && /\bpanel\b/i.test(text))) needs.push("panel");
+  if (/\boauth\b/i.test(text) || /\b(dropbox|clientstorage|network request)\b/i.test(text)) needs.push("oauth");
+  return needs;
+}
+
+/** The pages and calls the agent must use. Nothing here is written into the project. */
+export function implementationHandoff({ brief, pages = [], design = "" }) {
+  const needs = briefNeeds(brief);
+  const apis = [];
+  if (needs.includes("text")) {
+    apis.push({
+      api: "editor.createText()",
+      runtime: "document sandbox",
+      note: "Create the text in code.js, set a style (font, size, or color), and append it to the document."
+    });
   }
-  if (!evidence || !String(evidence).trim()) {
-    throw new Error("Refusing to write. There is no evidence sentence from the docs.");
+  if (needs.includes("image")) {
+    apis.push({
+      api: "addOnUISdk.app.document.addImage()",
+      runtime: "iframe runtime",
+      note: "Insert the image from the panel. Document edits that follow stay in the sandbox."
+    });
   }
-  const root = addonRoot(dir);
-  const files = [];
-  if (feature === "iframe") {
-    const html = findHtml(root);
-    if (!html) throw new Error("The add-on has no index.html to hold iframe UI.");
-    const label = labelFrom(brief);
-    const next = insertField(fs.readFileSync(html, "utf8"), label, evidence, page);
-    fs.writeFileSync(html, next);
-    files.push(path.relative(dir, html));
-    if (design === "swc") {
-      const note = path.join(root, "spectrum-note.txt");
-      fs.writeFileSync(note, `Design answer: Spectrum Web Components.\nThe implementation guide prefers them. This edit did not add a webpack pipeline when the template does not already have one.\nEvidence page: ${page}\n`);
-      files.push(path.relative(dir, note));
-    }
-  } else if (feature === "sandbox") {
-    const sandbox = findSandbox(root);
-    if (!sandbox) {
-      return { written: false, files: [], note: "The feature needs the document sandbox, and this add-on has no documentSandbox file. Nothing was written." };
-    }
-    const source = fs.readFileSync(sandbox, "utf8");
-    if (!/createText|editor\./.test(evidence) && !/document sandbox/i.test(evidence)) {
-      throw new Error("Refusing to write sandbox code. The evidence sentence does not mention the document sandbox.");
-    }
-    if (!source.includes("express-addon-develop:sandbox")) {
-      fs.writeFileSync(sandbox, `${source.trim()}\n\n// express-addon-develop:sandbox\n// ${page}: ${evidence.replace(/\s+/g, " ").slice(0, 180)}\nexport function featureReady() {\n  return true;\n}\n`);
-    }
-    files.push(path.relative(dir, sandbox));
+  if (needs.includes("panel") || (design === "swc" && !needs.includes("oauth"))) {
+    apis.push({
+      api: "sp-theme, sp-textfield, sp-button",
+      runtime: "iframe panel",
+      note: "Build the form with Spectrum Web Components. Do not leave a plain input labelled Note."
+    });
   }
-  return { written: files.length > 0, files, note: files.length ? "Wrote the feature from the docs." : "Nothing to write." };
+  if (needs.includes("oauth")) {
+    apis.push({
+      api: "addOnUISdk.app.oauth",
+      runtime: "iframe runtime",
+      note: "Declare permissions.oauth in manifest.json. clientStorage is addOnUISdk.instance.clientStorage."
+    });
+  }
+  if (!apis.length) {
+    apis.push({
+      api: "addOnUISdk",
+      runtime: "iframe panel",
+      note: "Implement the brief in the panel. Do not add a placeholder field."
+    });
+  }
+  return {
+    awaitingAgent: true,
+    written: false,
+    brief: String(brief || ""),
+    needs,
+    design,
+    pages,
+    apis,
+    note: "The agent writes this feature. A stub is not an implementation."
+  };
+}
+
+/**
+ * The feature is real only when the code calls the APIs the brief needs, the project builds,
+ * and a canned stub is absent. A failure is a list of problems. It does not mark the step done.
+ */
+export function verifyFeature({ dir, brief, build = true }) {
+  const needs = briefNeeds(brief);
+  const files = sourceFiles(dir);
+  const text = files.map((file) => file.text).join("\n");
+  const problems = [];
+  if (!text.trim()) problems.push("No source was written.");
+  if (isStub(text, dir)) problems.push("The add-on still has a canned stub (featureReady, a develop-feature field, or only the template's Create Rectangle).");
+  if (needs.includes("text") && !/createText\s*\(/.test(text)) problems.push("Styled text needs editor.createText() in the document sandbox.");
+  if (needs.includes("text") && !/fontSize|characterStyle|setStyle|\bfont\b|fill|color/i.test(text)) problems.push("Styled text needs a style: font, size, or color.");
+  if (needs.includes("image") && !/addImage\s*\(|createImage\s*\(/.test(text)) problems.push("An image needs addImage() or createImage().");
+  if (needs.includes("panel") && !/<sp-textfield\b|<sp-button\b|<sp-theme\b|sp-textfield|sp-button/i.test(text)) problems.push("A Spectrum form needs a Spectrum Web Component such as sp-textfield or sp-button.");
+  if (needs.includes("oauth") && !manifestAllowsOauth(dir)) problems.push("Network or OAuth needs permissions.oauth in the manifest.");
+  if (!needs.length) {
+    const word = distinctiveWord(brief);
+    if (word && !new RegExp(`\\b${word}\\b`, "i").test(text)) problems.push(`The code does not mention ${word} from the brief.`);
+  }
+  let built = { ok: true, skipped: true };
+  if (build && !problems.length) {
+    built = buildProject(dir);
+    if (!built.ok) problems.push(built.error || "The add-on did not build.");
+  }
+  return { ok: problems.length === 0, problems, needs, build: built };
+}
+
+export function applyManifestName(dir, name) {
+  const wanted = String(name || "").trim();
+  if (!wanted) return "";
+  for (const rel of ["src/manifest.json", "manifest.json"]) {
+    const file = path.join(dir, rel);
+    if (!fs.existsSync(file)) continue;
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    manifest.name = wanted;
+    fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+    return file;
+  }
+  return "";
 }
 
 function writeFixture(dir, template) {
@@ -119,46 +186,57 @@ function writeFixture(dir, template) {
   fs.writeFileSync(path.join(src, "index.html"), `<!doctype html><html><body><h1>${template}</h1></body></html>\n`);
 }
 
-function addonRoot(dir) {
-  if (fs.existsSync(path.join(dir, "src", "manifest.json"))) return path.join(dir, "src");
-  return dir;
+function sourceFiles(dir) {
+  const found = [];
+  const walk = (folder) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(folder, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") continue;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(html?|jsx?|tsx?|mjs|cjs|vue|svelte|json)$/i.test(entry.name)) {
+        try {
+          found.push({ file: full, text: fs.readFileSync(full, "utf8") });
+        } catch {
+          // Unreadable source is treated as missing.
+        }
+      }
+    }
+  };
+  walk(dir);
+  return found;
 }
 
-function findHtml(root) {
-  const direct = path.join(root, "index.html");
-  if (fs.existsSync(direct)) return direct;
-  const nested = path.join(root, "ui", "index.html");
-  if (fs.existsSync(nested)) return nested;
-  return "";
+function isStub(text, dir) {
+  if (/function\s+featureReady\s*\(/.test(text)) return true;
+  if (/id=["']develop-feature["']/.test(text)) return true;
+  const note = fs.existsSync(path.join(dir, "spectrum-note.txt")) || fs.existsSync(path.join(dir, "src", "spectrum-note.txt"));
+  if (note && !/createText\s*\(|addImage\s*\(|createImage\s*\(|<sp-textfield\b/i.test(text)) return true;
+  if (/Create Rectangle/.test(text) && !/createText\s*\(|addImage\s*\(|createImage\s*\(|<sp-textfield\b|<label\b/i.test(text)) return true;
+  return false;
 }
 
-function findSandbox(root) {
-  for (const rel of ["sandbox/code.js", "sandbox/code.ts", "code.js"]) {
-    const full = path.join(root, rel);
-    if (fs.existsSync(full)) return full;
+function distinctiveWord(brief) {
+  const words = String(brief || "").toLowerCase().match(/\b[a-z][a-z0-9-]{3,}\b/g) || [];
+  const skip = new Set(["add", "the", "and", "with", "from", "that", "this", "into", "your", "panel", "field", "feature", "using", "make", "insert"]);
+  return words.find((word) => !skip.has(word)) || "";
+}
+
+function manifestAllowsOauth(dir) {
+  for (const rel of ["src/manifest.json", "manifest.json"]) {
+    const file = path.join(dir, rel);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      return /oauth/i.test(JSON.stringify(manifest.permissions || {}));
+    } catch {
+      return false;
+    }
   }
-  return "";
-}
-
-function labelFrom(brief) {
-  const text = String(brief || "");
-  const named = text.match(/\b(caption|title|label|note|name)\b/i);
-  if (named) return named[1][0].toUpperCase() + named[1].slice(1).toLowerCase();
-  return "Note";
-}
-
-function insertField(html, label, evidence, page) {
-  if (html.includes('id="develop-feature"')) return html;
-  const quote = String(evidence).replace(/\s+/g, " ").replace(/--/g, "—").slice(0, 160);
-  const block = [
-    `<!-- ${page}: ${quote} -->`,
-    `<label for="develop-feature">${escapeHtml(label)}</label>`,
-    `<input id="develop-feature" name="develop-feature" type="text" />`
-  ].join("\n");
-  if (html.includes("</body>")) return html.replace("</body>", `${block}\n</body>`);
-  return `${html}\n${block}\n`;
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+  return false;
 }
