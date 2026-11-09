@@ -1,6 +1,6 @@
 {
   "name": "express-addon-review",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "description": "Add-on Preflight checks an Adobe Express add-on before submission: the source, the panel, and the listing.",

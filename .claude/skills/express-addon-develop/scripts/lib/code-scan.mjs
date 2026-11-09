@@ -397,60 +397,48 @@ function enclosingFn(stack, idOf) {
   return 0;
 }
 
-const IMAGE_CALL = /(^|\.)(addImage|createImage|createImageContainer|loadBitmapImage)$/;
-
-function isSandboxProxyCall(callee) {
-  if (callee?.type !== "MemberExpression") return false;
-  const chain = memberChain(callee.object) || [];
-  return chain.some((part) => part === "proxy" || /sandboxproxy/i.test(part));
-}
-
-/** Half of the page width, or a loop that steps across it. `page.width / 2 +` and `page.width * 0.5 +` are the same offset. */
-export function hasColumnPlacement(text) {
-  const parsed = parseSource("layout.js", String(text || ""));
-  if (!parsed.ast) return false;
-  let ok = false;
-  walk(parsed.ast, (node) => {
-    if (node.type === "BinaryExpression" && node.operator === "+" && (isHalfWidth(node.left) || isHalfWidth(node.right))) ok = true;
-    if (forLoopSpansPage(node)) ok = true;
-  });
-  return ok;
-}
-
-function isHalfWidth(node) {
-  if (!node || node.type !== "BinaryExpression") return false;
-  const width = (part) => part?.type === "MemberExpression" && !part.computed && part.property?.name === "width";
-  const half = (part) => part?.type === "NumericLiteral" && Math.abs(part.value - 0.5) < 1e-9;
-  if (node.operator === "/" && width(node.left) && node.right?.type === "NumericLiteral" && node.right.value === 2) return true;
-  if (node.operator === "*" && ((width(node.left) && half(node.right)) || (width(node.right) && half(node.left)))) return true;
-  return false;
-}
-
-function forLoopSpansPage(node) {
-  if (node?.type !== "ForStatement" || !node.test) return false;
-  const update = node.update;
-  const steps = update?.type === "UpdateExpression" || (update?.type === "AssignmentExpression" && update.operator === "+=");
-  if (!steps) return false;
-  let width = false;
-  walk(node.test, (inner) => {
-    if (inner.type === "MemberExpression" && !inner.computed && inner.property?.name === "width") width = true;
-  });
-  return width;
-}
-
-function insideKeptEdit(stack) {
+/**
+ * createImageContainer must run in the documented afterAsyncCallback (the third argument of
+ * keepContentActiveDuringAsync), or in a queueAsyncEdit callback. The callback may be written inline,
+ * or passed by name (`const afterLoad = () => {…}; keep…(page, async () => {}, afterLoad)`).
+ */
+function insideKeptEdit(stack, ast) {
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const fn = stack[i];
     if (!isFunction(fn)) continue;
     for (let j = i - 1; j >= 0; j -= 1) {
       const call = stack[j];
       if (call.type !== "CallExpression" || !call.arguments?.includes(fn)) continue;
-      const name = calleeName(call.callee);
-      if (name === "queueAsyncEdit") return true;
-      if (name === "keepContentActiveDuringAsync" && call.arguments[2] === fn) return true;
+      if (keptSlot(call, fn)) return true;
     }
+    const name = functionName(fn, stack[i - 1]);
+    if (name && passedByName(ast, name)) return true;
   }
   return false;
+}
+
+function keptSlot(call, arg) {
+  const name = calleeName(call.callee);
+  if (name === "queueAsyncEdit") return call.arguments[0] === arg;
+  if (name === "keepContentActiveDuringAsync") return call.arguments[2] === arg;
+  return false;
+}
+
+function functionName(fn, parent) {
+  if (fn.type === "FunctionDeclaration" && fn.id?.name) return fn.id.name;
+  if (parent?.type === "VariableDeclarator" && parent.init === fn && parent.id?.type === "Identifier") return parent.id.name;
+  if (parent?.type === "AssignmentExpression" && parent.right === fn && parent.left?.type === "Identifier") return parent.left.name;
+  return "";
+}
+
+function passedByName(ast, name) {
+  let found = false;
+  walk(ast, (node) => {
+    if (found || node.type !== "CallExpression") return;
+    const slot = calleeName(node.callee) === "queueAsyncEdit" ? node.arguments?.[0] : calleeName(node.callee) === "keepContentActiveDuringAsync" ? node.arguments?.[2] : null;
+    if (slot?.type === "Identifier" && slot.name === name) found = true;
+  });
+  return found;
 }
 
 /** createImageContainer must run in the documented afterAsyncCallback, or in queueAsyncEdit. */
@@ -463,37 +451,86 @@ export function imageKeepsContentActive(files) {
     if (!parsed.ast) continue;
     walk(parsed.ast, (node, stack) => {
       if (node.type !== "CallExpression" || calleeName(node.callee) !== "createImageContainer") return;
-      if (isSandboxProxyCall(node.callee)) return;
       saw = true;
-      if (!insideKeptEdit(stack)) bad = true;
+      if (!insideKeptEdit(stack, parsed.ast)) bad = true;
     });
   }
   return !saw || !bad;
 }
 
-/** An image call is placed when its function uses the shared free-space layout, not the page center alone. A sandbox proxy call is not the iframe image API. */
-export function imagePlacedWithContent(files) {
-  let saw = false;
-  let unplaced = false;
+const IFRAME_IMAGE = new Set(["addImage", "addAnimatedImage"]);
+
+/**
+ * Calls to the iframe document API, `addOnUISdk.app.document.addImage()`, found by what the receiver
+ * is, not by its name: aliases (`const doc = addOnUISdk.app.document`), fields
+ * (`this.doc = …app.document`) and destructuring (`const { addImage } = …app.document`) all count.
+ * A sandbox proxy call such as `this._api.addImage(blob)` is not this API, whatever the field is called.
+ */
+export function iframeImageCalls(files) {
+  const found = [];
   for (const file of files) {
-    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(file.rel || file.file || "")) continue;
-    const text = String(file.text || "");
-    const parsed = parseSource(file.rel || file.file, text);
+    const rel = file.rel || file.file || "";
+    if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(rel)) continue;
+    const parsed = parseSource(rel, String(file.text || ""));
     if (!parsed.ast) continue;
-    const layout = /boundsInParent/.test(text) && hasColumnPlacement(text);
-    walk(parsed.ast, (node, stack) => {
+    const aliases = new Map();
+    const methods = new Map();
+    const keyOf = (node) => {
+      const chain = memberChain(node);
+      return chain ? chain.join(".") : "";
+    };
+    walk(parsed.ast, (node) => {
+      let target = null;
+      let init = null;
+      if (node.type === "VariableDeclarator") { target = node.id; init = node.init; }
+      if (node.type === "AssignmentExpression" && node.operator === "=") { target = node.left; init = node.right; }
+      if (!target || !init) return;
+      if (init.type === "AwaitExpression") init = init.argument;
+      const chain = memberChain(init);
+      if (!chain) return;
+      if (target.type === "ObjectPattern") {
+        for (const prop of target.properties || []) {
+          if (prop.type !== "ObjectProperty" || prop.computed) continue;
+          const key = prop.key?.name || prop.key?.value;
+          const local = prop.value?.type === "Identifier" ? prop.value.name : prop.value?.left?.name;
+          if (key && local) methods.set(local, [...chain, key]);
+        }
+        return;
+      }
+      const name = target.type === "Identifier" ? target.name : keyOf(target);
+      if (name) aliases.set(name, chain);
+    });
+    const resolve = (chain) => {
+      let current = chain;
+      for (let depth = 0; depth < 6 && current; depth += 1) {
+        let replaced = false;
+        for (let cut = current.length; cut >= 1; cut -= 1) {
+          const head = current.slice(0, cut).join(".");
+          if (aliases.has(head) && aliases.get(head).join(".") !== head) {
+            current = [...aliases.get(head), ...current.slice(cut)];
+            replaced = true;
+            break;
+          }
+        }
+        if (!replaced) break;
+      }
+      return current;
+    };
+    const isDocument = (chain) => Boolean(chain && chain.length && chain.at(-1) === "document");
+    walk(parsed.ast, (node) => {
       if (node.type !== "CallExpression") return;
-      if (isSandboxProxyCall(node.callee)) return;
-      const called = calleeName(node.callee);
-      if (!called || !IMAGE_CALL.test(called)) return;
-      saw = true;
-      const owner = [...stack].reverse().find((item) => isCallable(item));
-      const body = owner && Number.isInteger(owner.start) && Number.isInteger(owner.end) ? text.slice(owner.start, owner.end) : text;
-      const shares = /boundsInParent/.test(body) || /placeOnPage\s*\(|placeImageNode\s*\(|placeHeading\s*\(/.test(body);
-      if (!shares || !layout) unplaced = true;
+      const callee = node.callee;
+      if (callee?.type === "MemberExpression" && !callee.computed && IFRAME_IMAGE.has(callee.property?.name)) {
+        const chain = memberChain(callee.object);
+        if (isDocument(chain ? resolve(chain) : null)) found.push({ rel, call: `${(chain || []).join(".")}.${callee.property.name}` });
+      }
+      if (callee?.type === "Identifier" && methods.has(callee.name)) {
+        const chain = resolve(methods.get(callee.name));
+        if (IFRAME_IMAGE.has(chain.at(-1)) && isDocument(chain.slice(0, -1))) found.push({ rel, call: callee.name });
+      }
     });
   }
-  return saw && !unplaced;
+  return found;
 }
 
 function resolveReceiver(object, stack, calledWith, names) {

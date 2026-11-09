@@ -1,0 +1,263 @@
+import addOnSandboxSdk from "add-on-sdk-document-sandbox";
+import { editor, constants } from "express-document-sdk";
+
+const { runtime } = addOnSandboxSdk.instance;
+
+function fitInside(node, maxWidth, maxHeight) {
+  const box = node.boundsLocal;
+  if (box.width > maxWidth || box.height > maxHeight) {
+    node.resize({
+      width: maxWidth,
+      height: maxHeight,
+      behavior: constants.ResizeBehavior.contain,
+      avoidScalingVisualDetailsIfPossible: false
+    });
+  }
+}
+
+const placedImages = [];
+const FULL_MESSAGE = "The page is full. This stays at a readable size, so it was not added.";
+
+function marginOf(page) {
+  return Math.round(Math.min(page.width, page.height) * 0.08);
+}
+
+function gapFor(height) {
+  return Math.max(8, Math.round(Math.max(height, 1) * 0.15));
+}
+
+function rectsOverlap(a, b) {
+  if (!a || !b) return false;
+  return a.x < b.x + b.width - 0.5 && a.x + a.width > b.x + 0.5 && a.y < b.y + b.height - 0.5 && a.y + a.height > b.y + 0.5;
+}
+
+function onPage(rect, page, margin) {
+  return rect.x >= margin - 0.5 && rect.y >= margin - 0.5 && rect.x + rect.width <= page.width - margin + 0.5 && rect.y + rect.height <= page.height - margin + 0.5;
+}
+
+function drop(node, slot) {
+  const fitted = node.boundsLocal;
+  const anchor = node.centerPointLocal || { x: fitted.x + fitted.width / 2, y: fitted.y + fitted.height / 2 };
+  node.setPositionInParent(slot, anchor);
+}
+
+function releaseNode(node, page) {
+  if (typeof node.removeFromParent === "function") node.removeFromParent();
+  const list = page.children && page.children.items;
+  if (Array.isArray(list)) {
+    const at = list.indexOf(node);
+    if (at >= 0) list.splice(at, 1);
+  }
+}
+
+function selectionNode() {
+  const selected = editor.context.selection && editor.context.selection[0];
+  return selected && selected.boundsInParent ? selected : null;
+}
+
+function columnCenter(page, column) {
+  if (column === 0) return page.width / 2;
+  const side = Math.ceil(column / 2);
+  const dir = column % 2 === 1 ? 1 : -1;
+  return page.width / 2 + dir * side * (page.width * 0.25);
+}
+
+function columnBottom(page, x, self) {
+  let bottom = 0;
+  for (const item of page.children || []) {
+    if (item === self || placedImages.includes(item) || !item.boundsInParent) continue;
+    const box = item.boundsInParent;
+    const cx = box.x + box.width / 2;
+    if (Math.abs(cx - x) > 2) continue;
+    if (box.y + box.height > bottom) bottom = box.y + box.height;
+  }
+  const selected = selectionNode();
+  if (selected && selected !== self && selected.boundsInParent.y + selected.boundsInParent.height > bottom) {
+    bottom = selected.boundsInParent.y + selected.boundsInParent.height;
+  }
+  return bottom;
+}
+
+function overlapsContent(rect, page, self) {
+  for (const item of page.children || []) {
+    if (item === self || placedImages.includes(item) || !item.boundsInParent) continue;
+    if (rectsOverlap(rect, item.boundsInParent)) return true;
+  }
+  const selected = selectionNode();
+  if (selected && selected !== self && rectsOverlap(rect, selected.boundsInParent)) return true;
+  return false;
+}
+
+function slotInColumn(node, page, margin, column) {
+  const fitted = node.boundsLocal;
+  const gap = gapFor(fitted.height);
+  const x = columnCenter(page, column);
+  const bottom = columnBottom(page, x, node);
+  const y = (bottom > 0 ? bottom + gap : margin) + fitted.height / 2;
+  const rect = { x: x - fitted.width / 2, y: y - fitted.height / 2, width: fitted.width, height: fitted.height };
+  if (!onPage(rect, page, margin)) return null;
+  if (overlapsContent(rect, page, node)) return null;
+  return { x, y, rect };
+}
+
+function shrinkToward(node, minHeight) {
+  const box = node.boundsLocal;
+  if (box.height <= minHeight + 0.5) return false;
+  const nextH = Math.max(minHeight, Math.round(box.height * 0.82));
+  if (nextH >= box.height - 0.5) return false;
+  const nextW = Math.max(8, Math.round(box.width * (nextH / box.height)));
+  node.resize({
+    width: nextW,
+    height: nextH,
+    behavior: constants.ResizeBehavior.contain,
+    avoidScalingVisualDetailsIfPossible: false
+  });
+  return true;
+}
+
+function moveImageBelow(image, page, margin, reserved) {
+  const gap = 8;
+  const minH = 64;
+  const targetTop = reserved.y + reserved.height + gap;
+  const available = page.height - margin - targetTop;
+  if (available < minH - 0.5) return false;
+  const box = image.boundsLocal;
+  const maxW = Math.max(8, page.width - margin * 2);
+  if (box.height > available || box.width > maxW) {
+    const scale = Math.min(maxW / box.width, available / box.height);
+    const nextH = Math.round(box.height * scale);
+    const nextW = Math.round(box.width * scale);
+    if (nextH < minH - 0.5 || nextW < 8) return false;
+    image.resize({
+      width: nextW,
+      height: nextH,
+      behavior: constants.ResizeBehavior.contain,
+      avoidScalingVisualDetailsIfPossible: false
+    });
+  }
+  const fitted = image.boundsLocal;
+  const x = page.width / 2;
+  const rect = { x: x - fitted.width / 2, y: targetTop, width: fitted.width, height: fitted.height };
+  if (!onPage(rect, page, margin) || rectsOverlap(rect, reserved)) return false;
+  for (const item of page.children || []) {
+    if (item === image || placedImages.includes(item) || !item.boundsInParent) continue;
+    if (rectsOverlap(rect, item.boundsInParent)) return false;
+  }
+  for (const other of placedImages) {
+    if (other === image) continue;
+    if (other.boundsInParent && rectsOverlap(rect, other.boundsInParent)) return false;
+  }
+  drop(image, { x, y: targetTop + fitted.height / 2 });
+  return true;
+}
+
+function parkImages(page, margin, reserved) {
+  for (const image of placedImages) {
+    if (!image.boundsInParent || !rectsOverlap(reserved, image.boundsInParent)) continue;
+    if (!moveImageBelow(image, page, margin, reserved)) return false;
+  }
+  return placedImages.every((image) => !image.boundsInParent || !rectsOverlap(reserved, image.boundsInParent));
+}
+
+function restoreSize(node, fitted) {
+  const box = node.boundsLocal;
+  if (Math.abs(box.width - fitted.width) < 0.5 && Math.abs(box.height - fitted.height) < 0.5) return;
+  node.resize({
+    width: fitted.width,
+    height: fitted.height,
+    behavior: constants.ResizeBehavior.contain,
+    avoidScalingVisualDetailsIfPossible: false
+  });
+}
+
+function placeHeading(node, page) {
+  const margin = marginOf(page);
+  const maxWidth = Math.max(32, page.width - margin * 2);
+  const maxHeight = Math.max(32, page.height - margin * 2);
+  fitInside(node, maxWidth, maxHeight);
+  const fitted = { width: node.boundsLocal.width, height: node.boundsLocal.height };
+  const minH = Math.round(24 * 1.2);
+  for (let column = 0; column < 3; column += 1) {
+    restoreSize(node, fitted);
+    for (let guard = 0; guard < 8; guard += 1) {
+      const slot = slotInColumn(node, page, margin, column);
+      if (slot && parkImages(page, margin, slot.rect)) {
+        drop(node, slot);
+        return { ok: true, message: "" };
+      }
+      if (!shrinkToward(node, minH)) break;
+    }
+  }
+  releaseNode(node, page);
+  return { ok: false, message: FULL_MESSAGE };
+}
+
+function contentBottom(page, self) {
+  let bottom = 0;
+  for (const item of page.children || []) {
+    if (item === self || placedImages.includes(item) || !item.boundsInParent) continue;
+    const box = item.boundsInParent;
+    if (box.y + box.height > bottom) bottom = box.y + box.height;
+  }
+  const selected = selectionNode();
+  if (selected && selected !== self && selected.boundsInParent.y + selected.boundsInParent.height > bottom) {
+    bottom = selected.boundsInParent.y + selected.boundsInParent.height;
+  }
+  return bottom;
+}
+
+function placeImageNode(image, page) {
+  const margin = marginOf(page);
+  const maxWidth = Math.max(64, page.width - margin * 2);
+  const bottom = contentBottom(page, image);
+  const gap = 12;
+  if (bottom > 0) {
+    const top = bottom + gap;
+    const available = page.height - margin - top;
+    if (available < 64) {
+      releaseNode(image, page);
+      return { ok: false, message: FULL_MESSAGE };
+    }
+    fitInside(image, maxWidth, available);
+    const fitted = image.boundsLocal;
+    drop(image, { x: page.width / 2, y: top + fitted.height / 2 });
+    return { ok: true, message: "" };
+  }
+  const maxHeight = Math.max(64, (page.height - margin * 2) * 0.5);
+  fitInside(image, maxWidth * 0.7, maxHeight);
+  const fitted = image.boundsLocal;
+  drop(image, { x: page.width / 2, y: page.height - margin - fitted.height / 2 });
+  return { ok: true, message: "" };
+}
+
+export function addHeading(heading) {
+  const page = editor.context.insertionParent;
+  const textNode = editor.createText(heading);
+  const cap = Math.min(72, Math.round(page.width / 16));
+  page.children.append(textNode);
+  textNode.fullContent.applyCharacterStyles(
+    { fontSize: cap, color: { red: 0.1, green: 0.1, blue: 0.1, alpha: 1 } },
+    { start: 0, length: heading.length }
+  );
+  const placed = placeHeading(textNode, page);
+  return placed.message;
+}
+
+export async function addImage(blob) {
+  const page = editor.context.insertionParent;
+  const bitmap = await editor.loadBitmapImage(blob);
+  let placed = { ok: false, message: FULL_MESSAGE };
+  await editor.keepContentActiveDuringAsync(
+    page,
+    async () => {},
+    () => {
+      const image = editor.createImageContainer(bitmap, { initialSize: { width: 256, height: 256 } });
+      page.children.append(image);
+      placed = placeImageNode(image, page);
+      if (placed.ok) placedImages.push(image);
+    }
+  );
+  return placed.message || "";
+}
+
+if (typeof runtime !== "undefined") runtime.exposeApi({ addHeading, addImage });

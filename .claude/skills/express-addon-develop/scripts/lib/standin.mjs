@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseSource } from "./code-scan.mjs";
 
 const SDK_URL = "https://new.express.adobe.com/static/add-on-sdk/sdk.js";
@@ -15,102 +16,247 @@ export function pngBytes() {
 
 /**
  * Methods the sandbox passes to runtime.exposeApi.
+ * The object can be written inline, through an alias (or an alias of an alias), with spread,
+ * with properties assigned one by one, or with Object.assign. Wrapper methods count by their keys.
  * A panel `_sandboxProxy.method()` call is not an exposed method. The stand-in answers only what the sandbox exposes.
  */
 export function exposedSandboxMethods(source) {
   const text = String(source || "");
   const found = new Set();
   const parsed = parseSource("sandbox.js", text);
-  const objects = new Map();
-  const visit = (node) => {
-    if (!node || typeof node !== "object" || typeof node.type !== "string") return;
-    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && node.init?.type === "ObjectExpression") {
-      objects.set(node.id.name, node.init);
+  if (!parsed.ast) return [];
+  const inits = new Map();
+  const assigned = new Map();
+  const exposedArgs = [];
+  visit(parsed.ast, (node) => {
+    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && node.init) {
+      const list = inits.get(node.id.name) || [];
+      list.push(node.init);
+      inits.set(node.id.name, list);
+    }
+    if (node.type === "AssignmentExpression" && node.operator === "=") {
+      if (node.left?.type === "Identifier") {
+        const list = inits.get(node.left.name) || [];
+        list.push(node.right);
+        inits.set(node.left.name, list);
+      }
+      if (node.left?.type === "MemberExpression" && node.left.object?.type === "Identifier") {
+        const key = node.left.computed ? (node.left.property?.type === "StringLiteral" ? node.left.property.value : "") : node.left.property?.name;
+        if (key) {
+          const list = assigned.get(node.left.object.name) || [];
+          list.push(key);
+          assigned.set(node.left.object.name, list);
+        }
+      }
     }
     if (node.type === "CallExpression") {
       const callee = node.callee;
       const name = callee?.type === "Identifier" ? callee.name : callee?.property?.name;
-      if (name === "exposeApi" && node.arguments?.[0]) addObject(node.arguments[0]);
+      if (name === "exposeApi" && node.arguments?.[0]) exposedArgs.push(node.arguments[0]);
     }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === "object" && typeof value.type === "string") visit(value);
-    }
-  };
+  });
+  const seen = new Set();
   const addObject = (node) => {
-    const object = node?.type === "Identifier" ? objects.get(node.name) : node?.type === "ObjectExpression" ? node : null;
-    if (!object) return;
-    for (const prop of object.properties || []) {
-      if (prop.type === "SpreadElement") continue;
-      const key = prop.key?.name || prop.key?.value;
-      if (typeof key === "string" && /^[A-Za-z_]/.test(key)) found.add(key);
+    if (!node || seen.has(node)) return;
+    seen.add(node);
+    if (node.type === "AwaitExpression" || node.type === "TSAsExpression" || node.type === "ParenthesizedExpression") return addObject(node.argument || node.expression);
+    if (node.type === "Identifier") {
+      for (const init of inits.get(node.name) || []) addObject(init);
+      for (const key of assigned.get(node.name) || []) add(key);
+      return;
     }
+    if (node.type === "ObjectExpression") {
+      for (const prop of node.properties || []) {
+        if (prop.type === "SpreadElement") { addObject(prop.argument); continue; }
+        if (prop.computed && prop.key?.type !== "StringLiteral") continue;
+        add(prop.key?.name || prop.key?.value);
+      }
+      return;
+    }
+    if (node.type === "CallExpression") {
+      const callee = node.callee;
+      const isAssign = callee?.type === "MemberExpression" && callee.object?.name === "Object" && callee.property?.name === "assign";
+      if (isAssign) for (const arg of node.arguments || []) addObject(arg);
+      return;
+    }
+    if (node.type === "ConditionalExpression") { addObject(node.consequent); addObject(node.alternate); }
+    if (node.type === "LogicalExpression") { addObject(node.left); addObject(node.right); }
   };
-  if (parsed.ast) visit(parsed.ast);
+  function add(key) {
+    if (typeof key === "string" && /^[A-Za-z_$]/.test(key)) found.add(key);
+  }
+  for (const arg of exposedArgs) addObject(arg);
   return [...found];
 }
 
-/** Panel calls through a sandbox proxy. These are not addOnUISdk.app.document methods. */
+function visit(node, fn) {
+  if (!node || typeof node !== "object" || typeof node.type !== "string") return;
+  fn(node);
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "loc" || key === "start" || key === "end" || /Comments$/.test(key)) continue;
+    if (Array.isArray(value)) value.forEach((item) => visit(item, fn));
+    else if (value && typeof value === "object" && typeof value.type === "string") visit(value, fn);
+  }
+}
+
+function chainOf(node) {
+  const parts = [];
+  let current = node;
+  while (current) {
+    if (current.type === "Identifier") { parts.unshift(current.name); return parts; }
+    if (current.type === "ThisExpression") { parts.unshift("this"); return parts; }
+    if (current.type === "MemberExpression" && !current.computed && current.property?.type === "Identifier") {
+      parts.unshift(current.property.name);
+      current = current.object;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function callsApiProxy(node) {
+  let hit = false;
+  visit(node, (inner) => {
+    if (inner.type === "CallExpression" && (inner.callee?.property?.name === "apiProxy" || inner.callee?.name === "apiProxy")) hit = true;
+  });
+  return hit;
+}
+
+/**
+ * Panel calls through the sandbox proxy, found by where the receiver came from: whatever was
+ * assigned the result of runtime.apiProxy(), and its aliases and destructured methods.
+ * Names such as `proxy` or `sandboxProxy` still count when the assignment is out of sight.
+ * These are not addOnUISdk.app.document methods.
+ */
 export function panelSandboxCalls(source) {
   const found = [];
   const parsed = parseSource("panel.js", String(source || ""));
   if (!parsed.ast) return found;
-  const visit = (node) => {
-    if (!node || typeof node !== "object" || typeof node.type !== "string") return;
-    if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && !node.callee.computed) {
-      const chain = [];
-      let current = node.callee.object;
-      while (current) {
-        if (current.type === "Identifier") {
-          chain.push(current.name);
-          break;
-        }
-        if (current.type === "ThisExpression") {
-          chain.push("this");
-          break;
-        }
-        if (current.type === "MemberExpression" && !current.computed && current.property?.type === "Identifier") {
-          chain.push(current.property.name);
-          current = current.object;
-          continue;
-        }
-        break;
-      }
-      if (chain.some((part) => part === "proxy" || /sandboxproxy/i.test(part))) {
-        const name = node.callee.property?.name;
-        if (typeof name === "string") found.push(name);
-      }
+  const proxies = new Set();
+  const methods = new Map();
+  const bindings = [];
+  visit(parsed.ast, (node) => {
+    let target = null;
+    let init = null;
+    if (node.type === "VariableDeclarator") { target = node.id; init = node.init; }
+    if (node.type === "AssignmentExpression" && node.operator === "=") { target = node.left; init = node.right; }
+    if (target && init) bindings.push({ target, init });
+    if (node.type === "CallExpression" && node.callee?.property?.name === "then" && callsApiProxy(node.callee.object)) {
+      const fn = node.arguments?.[0];
+      const param = fn?.params?.[0];
+      if (param?.type === "Identifier") proxies.add(param.name);
     }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === "object" && typeof value.type === "string") visit(value);
-    }
+  });
+  const isProxy = (node) => {
+    if (!node) return false;
+    if (node.type === "AwaitExpression") return isProxy(node.argument);
+    if (node.type === "CallExpression" && (node.callee?.property?.name === "apiProxy" || node.callee?.name === "apiProxy")) return true;
+    const chain = chainOf(node);
+    if (!chain) return false;
+    const key = chain.join(".");
+    return proxies.has(key) || chain.some((part) => part === "proxy" || /sandboxproxy/i.test(part));
   };
-  visit(parsed.ast);
+  for (let round = 0; round < 6; round += 1) {
+    let grew = false;
+    for (const { target, init } of bindings) {
+      if (!isProxy(init)) continue;
+      if (target.type === "ObjectPattern") {
+        for (const prop of target.properties || []) {
+          if (prop.type !== "ObjectProperty" || prop.computed) continue;
+          const key = prop.key?.name || prop.key?.value;
+          const local = prop.value?.type === "Identifier" ? prop.value.name : prop.value?.left?.name;
+          if (key && local && !methods.has(local)) { methods.set(local, key); grew = true; }
+        }
+        continue;
+      }
+      const chain = chainOf(target);
+      const key = chain ? chain.join(".") : "";
+      if (key && !proxies.has(key)) { proxies.add(key); grew = true; }
+    }
+    if (!grew) break;
+  }
+  visit(parsed.ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const callee = node.callee;
+    if (callee?.type === "MemberExpression" && !callee.computed && callee.property?.type === "Identifier" && isProxy(callee.object)) found.push(callee.property.name);
+    if (callee?.type === "Identifier" && methods.has(callee.name)) found.push(methods.get(callee.name));
+  });
   return found;
 }
 
 /** Panel proxy calls whose names are not in runtime.exposeApi. */
-export function sandboxApiMismatches(files) {
-  const exposed = new Set();
+export function sandboxApiMismatches(files, { exposed: known = null } = {}) {
+  const exposed = new Set(known || []);
   const called = [];
   for (const file of files || []) {
     const text = String(file.text || "");
     if (!/\.(mjs|cjs|jsx?|tsx?)$/i.test(file.rel || file.file || "code.js")) continue;
-    for (const name of exposedSandboxMethods(text)) exposed.add(name);
+    if (!known) for (const name of exposedSandboxMethods(text)) exposed.add(name);
     called.push(...panelSandboxCalls(text));
   }
   return [...new Set(called.filter((name) => !exposed.has(name)))];
 }
 
-export function standInSource(methods = []) {
-  const names = [...new Set(methods.filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))];
-  if (!names.length) return STANDIN_SOURCE;
-  const body = names.map((name) => `        ${name}(...args) { return { ok: true, api: ${JSON.stringify(name)}, args }; }`).join(",\n");
+/**
+ * The panel SDK stand-in. When the add-on's built sandbox file is served next to it, apiProxy
+ * loads that file against the document stand-in and returns the methods it really exposed, so a
+ * panel press runs the add-on's own sandbox code and shows what it really returns or throws.
+ * Without a sandbox file, each exposed name answers "" (a sandbox that returns nothing), never an object.
+ */
+export function standInSource(methods = [], { sandbox = "" } = {}) {
+  const names = [...new Set(methods.filter((name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)))];
+  const fallback = names.length ? names : ["createRectangle"];
+  const body = `async () => {
+        const sandboxUrl = ${JSON.stringify(sandbox)};
+        if (sandboxUrl) {
+          try {
+            await import(sandboxUrl);
+            const doc = globalThis.__expressDocumentStandIn;
+            const api = doc && doc.log.exposed;
+            if (api && typeof api === "object") {
+              const proxy = {};
+              for (const name of Object.keys(api)) {
+                if (typeof api[name] !== "function") continue;
+                proxy[name] = async (...args) => {
+                  const seen = doc.log.violations.length;
+                  try {
+                    return await api[name](...args);
+                  } catch (error) {
+                    console.error("express-sdk-stand-in: sandbox " + name + "() threw: " + (error && error.message ? error.message : error));
+                    throw error;
+                  } finally {
+                    for (const note of doc.log.violations.slice(seen)) console.error("express-sdk-stand-in: sandbox " + name + "(): " + note);
+                  }
+                };
+              }
+              return proxy;
+            }
+            console.error("express-sdk-stand-in: the sandbox file loaded but did not call runtime.exposeApi with an object.");
+            return {};
+          } catch (error) {
+            console.error("express-sdk-stand-in: the sandbox file did not load: " + (error && error.message ? error.message : error));
+          }
+        }
+        return {
+${fallback.map((name) => `          ${name}: async () => ""`).join(",\n")}
+        };
+      }`;
   const start = STANDIN_SOURCE.indexOf("apiProxy: async () => ({");
   const end = STANDIN_SOURCE.indexOf("      }),", start);
-  return `${STANDIN_SOURCE.slice(0, start)}apiProxy: async () => ({\n${body}\n      }),${STANDIN_SOURCE.slice(end + "      }),".length)}`;
+  return `${STANDIN_SOURCE.slice(0, start)}apiProxy: ${body},${STANDIN_SOURCE.slice(end + "      }),".length)}`;
 }
+
+/** The document sandbox SDK modules for the browser, both bare names point here through an import map. */
+export const SANDBOX_SDK_STANDIN = `import { createDocument } from "./document-stand-in.mjs";
+const doc = createDocument({ width: 1920, height: 1080 });
+globalThis.__expressDocumentStandIn = doc;
+export const editor = doc.editor;
+export const constants = doc.constants;
+export const colorUtils = doc.colorUtils;
+export const fonts = doc.fonts;
+export default doc.modules["add-on-sdk-document-sandbox"].default;
+`;
 
 export const STANDIN_SOURCE = `/**
  * SDK STAND-IN
@@ -200,7 +346,13 @@ export async function serveWithStandIn(sourceDir) {
     }
   };
   collect(root);
-  fs.writeFileSync(path.join(root, "sdk-stand-in.js"), standInSource(methods));
+  const sandbox = sandboxFileIn(root);
+  if (sandbox) {
+    fs.copyFileSync(DOCUMENT_STANDIN, path.join(root, "document-stand-in.mjs"));
+    fs.writeFileSync(path.join(root, "sandbox-sdk-stand-in.js"), SANDBOX_SDK_STANDIN);
+    addImportMap(root);
+  }
+  fs.writeFileSync(path.join(root, "sdk-stand-in.js"), standInSource(methods, { sandbox: sandbox ? `./${sandbox}` : "" }));
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
@@ -226,6 +378,40 @@ export async function serveWithStandIn(sourceDir) {
       resolve();
     }))
   };
+}
+
+const DOCUMENT_STANDIN = fileURLToPath(new URL("./document-stand-in.mjs", import.meta.url));
+const SANDBOX_MODULES = ["add-on-sdk-document-sandbox", "express-document-sdk"];
+
+/** The manifest's documentSandbox file in the served folder, when it is an ES module that imports the sandbox SDK. */
+export function sandboxFileIn(root) {
+  let manifest = {};
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+  } catch {
+    return "";
+  }
+  for (const point of manifest.entryPoints || []) {
+    const rel = String(point.documentSandbox || "").replace(/^\.?\/+/, "");
+    if (!rel || rel.includes("..")) continue;
+    const file = path.join(root, rel);
+    if (!fs.existsSync(file)) continue;
+    const text = fs.readFileSync(file, "utf8");
+    if (SANDBOX_MODULES.some((name) => text.includes(`"${name}"`) || text.includes(`'${name}'`))) return rel.split(path.sep).join("/");
+  }
+  return "";
+}
+
+function addImportMap(root) {
+  const map = `<script type="importmap">${JSON.stringify({ imports: Object.fromEntries(SANDBOX_MODULES.map((name) => [name, "./sandbox-sdk-stand-in.js"])) })}</script>`;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.html?$/i.test(entry.name)) continue;
+    const file = path.join(root, entry.name);
+    const html = fs.readFileSync(file, "utf8");
+    if (html.includes('type="importmap"')) continue;
+    const next = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => `${tag}\n${map}`) : `${map}\n${html}`;
+    fs.writeFileSync(file, next);
+  }
 }
 
 function osTmp() {

@@ -2,7 +2,7 @@
   "name": "express-addon-review",
   "displayName": "Add-on Preflight",
   "description": "Reviews an Adobe Express add-on against Adobe's current docs before submission: scans the code, walks the panel at 320px in light and dark, fixes what it finds, and prepares the listing screenshots. Follow along on a live local dashboard or in chat.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": "express-addon-review",
   "license": "MIT",
   "keywords": [

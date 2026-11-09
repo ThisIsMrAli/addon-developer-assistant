@@ -1,14 +1,12 @@
 /**
- * Fill the locked listing pages with phrases that already exist in the add-on,
- * and drop image tags whose files are not there. The stylesheet and the layout stay locked.
+ * Fill the locked listing pages with what the add-on really does (read from its code) and phrases
+ * that already exist in its panel, and drop image tags whose files are not there. The panel pictures
+ * are real captures of the built panel (panel-capture.mjs). Nothing is drawn in their place.
+ * The stylesheet and the layout stay locked.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import zlib from "node:zlib";
-import { pathToFileURL } from "node:url";
 import { addonCorpus } from "../../../express-addon-review/scripts/lib/listing.mjs";
-import { findChrome, shoot } from "../../../express-addon-review/scripts/lib/chrome.mjs";
 import { panelMarkup } from "./code-scan.mjs";
 
 const BOILERPLATE = /^(get started|create rectangle|hello world|welcome|click me|javascript|swc-javascript|adobe creative cloud web add-on\.?)$/i;
@@ -65,74 +63,191 @@ export function phrasesFromAddon(dir) {
   return [...htmlPhrases, ...metaPhrases];
 }
 
-const KEYWORD_SKIP = new Set(["the", "and", "for", "with", "add", "from", "that", "this", "into", "your", "both", "only", "via", "not", "now", "was", "are", "two", "user", "sign", "then", "onto", "page", "panel", "button", "field", "using", "use", "its", "has", "have", "when", "will", "can", "you", "our", "new", "all", "spectrum"]);
+const KEYWORD_SKIP = new Set(["the", "and", "for", "with", "add", "adds", "from", "that", "this", "into", "your", "both", "only", "via", "not", "now", "was", "are", "two", "user", "sign", "signs", "then", "onto", "page", "panel", "button", "field", "using", "use", "its", "has", "have", "when", "will", "can", "you", "our", "new", "all", "spectrum", "type", "pick", "between", "sessions", "places", "shows", "lists", "saves", "what", "enter", "current"]);
 const API_WORD = /^(sp-|createrenditions|clientstorage|addimage|createtext|createrectangle|sandbox|iframe|oauth|runtime|textfield|spbutton)/i;
 
-function featurePhrases(brief) {
-  const text = String(brief || "");
-  const wants = [];
-  if (/\bheadings?\b|\bheadline\b/i.test(text)) wants.push("a heading");
-  if (/\bimages?\b|\bphotos?\b|\bpictures?\b/i.test(text)) wants.push("an image");
-  if (/\bcaptions?\b/i.test(text)) wants.push("a caption");
-  if (/\bnotes?\b/i.test(text)) wants.push("a note");
-  if (/\brenditions?\b|\bexports?\b/i.test(text)) wants.push("an export");
-  return wants;
+const PROVIDERS = [
+  [/dropbox/i, "Dropbox"],
+  [/googleapis|accounts\.google|drive\.google/i, "Google Drive"],
+  [/onedrive|graph\.microsoft|login\.microsoftonline/i, "OneDrive"],
+  [/\bbox\.com\b/i, "Box"],
+  [/figma/i, "Figma"],
+  [/github/i, "GitHub"],
+  [/notion/i, "Notion"],
+  [/slack/i, "Slack"]
+];
+
+function sourceFiles(dir) {
+  const files = [];
+  const walk = (folder) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(folder, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (["node_modules", ".git", "dist", "build", "out", "review-output"].includes(entry.name)) continue;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(m?jsx?|tsx?|html?|json)$/i.test(entry.name) && fs.statSync(full).size < 1_000_000) files.push({ rel: path.relative(dir, full), text: fs.readFileSync(full, "utf8") });
+    }
+  };
+  walk(dir);
+  return files;
 }
 
-function joinList(items) {
-  if (items.length <= 1) return items[0] || "";
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1").replace(/<!--[\s\S]*?-->/g, " ");
+
+/**
+ * What the add-on does, read from its code, as short sentences for the listing. Each fact is
+ * there only because the matching API call (or manifest permission) is in the add-on.
+ */
+export function featureFacts(dir) {
+  const files = sourceFiles(dir);
+  const code = files.filter((file) => !/\.json$/i.test(file.rel)).map((file) => stripComments(file.text)).join("\n");
+  let manifest = {};
+  const manifestFile = files.find((file) => /(^|\/)manifest\.json$/i.test(file.rel.replaceAll("\\", "/")));
+  try { manifest = manifestFile ? JSON.parse(manifestFile.text) : {}; } catch { manifest = {}; }
+  const ui = phrasesFromAddon(dir).join(" ").toLowerCase();
+  const facts = [];
+  const nouns = [];
+  const makesText = /\.createText\s*\(/.test(code) || /document\.addText\b/.test(code);
+  const makesImage = /\.(createImageContainer|loadBitmapImage)\s*\(/.test(code) || /document\.add(Animated)?Image\s*\(/.test(code);
+  if (makesText) {
+    const noun = /\bheadings?\b/.test(ui) ? "heading" : /\bcaptions?\b/.test(ui) ? "caption" : /\btitles?\b/.test(ui) ? "title" : /\bnotes?\b/.test(ui) ? "note" : "text";
+    const typed = /<(input|textarea|sp-textfield|sp-search)\b|textfield|\.value\b/i.test(code);
+    facts.push(`Adds the ${noun === "text" ? "text" : noun} you type to the page`);
+    nouns.push(noun === "text" ? "text" : `${noun}s`);
+    if (!typed) facts[facts.length - 1] = `Adds ${noun === "text" ? "text" : `a ${noun}`} to the page`;
+  }
+  if (makesImage) {
+    facts.push(/<input[^>]*type=["']?file|showOpenFilePicker|type:\s*["']file/i.test(code) ? "Places an image you pick on the page" : "Places an image on the page");
+    nouns.push("images");
+  }
+  if ((makesText || makesImage) && /boundsInParent/.test(code) && /insertionParent/.test(code)) facts.push("Keeps every item inside the page, clear of what is already there");
+  if (/\.createRenditions\s*\(/.test(code)) {
+    const format = code.match(/RenditionFormat\.(png|jpg|pdf|mp4|pptx)\b/i)?.[1] || code.match(/["']image\/(png|jpeg)["']/i)?.[1] || code.match(/format:\s*["'](png|jpg|pdf|mp4)["']/i)?.[1] || "";
+    const kind = format ? `a ${format.toLowerCase() === "jpeg" ? "JPG" : format.toUpperCase()}` : "an image";
+    const preview = /URL\.createObjectURL|\.src\s*=|<img\b|preview/i.test(code);
+    const download = /\.download\s*=|download\s*\(|\bdownload=/i.test(code);
+    facts.push(`Exports the current page as ${kind}${preview ? " with a preview" : ""}${download ? " you can download" : ""}`);
+    nouns.push("export", format ? format.toLowerCase() : "rendition");
+  }
+  if (/oauth\.authorize|authorizeWithOwnRedirect|oauth\.authorize\b/.test(code)) {
+    const hosts = JSON.stringify(manifest?.requiredPermissions?.oauth || []) + code.match(/https:\/\/[a-z0-9.-]+/gi)?.join(" ");
+    const provider = PROVIDERS.find(([pattern]) => pattern.test(hosts))?.[1] || "";
+    facts.push(provider ? `Signs in to ${provider} from the panel` : "Signs in to your account from the panel");
+    if (provider) nouns.push(provider.toLowerCase());
+    if (/list_folder|listFiles|files\.list|\/files\b|\.entries\b/i.test(code)) facts.push(provider ? `Lists your ${provider} files` : "Lists your files");
+  }
+  if (/clientStorage/.test(code)) facts.push(/\bnotes?\b/.test(ui) ? "Keeps your notes between sessions" : "Remembers what you enter between sessions");
+  if (/\bnotes?\b/.test(ui) && !nouns.includes("notes")) nouns.push("notes");
+  return { facts: [...new Set(facts)], nouns };
 }
 
-function writtenSummary(name, brief) {
-  const wants = featurePhrases(brief);
-  if (wants.length) return `Adds ${joinList(wants)} to the page.`;
-  const clean = String(name || "This add-on").trim();
-  return `${clean} works on the current page.`;
+function sentence(text) {
+  const clean = String(text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return "";
+  return /[.!?]$/.test(clean) ? clean : `${clean}.`;
 }
 
 export function listingFrom({ name, brief = "", description = "", dir = "" }) {
+  const { facts, nouns } = dir ? featureFacts(dir) : { facts: [], nouns: [] };
   const phrases = dir ? phrasesFromAddon(dir) : [];
-  const specific = phrases.filter((phrase) => !BOILERPLATE.test(phrase) && phrase.toLowerCase() !== String(name || "").trim().toLowerCase());
+  const own = String(name || "").trim().toLowerCase();
+  const specific = phrases.filter((phrase) => !BOILERPLATE.test(phrase) && phrase.toLowerCase() !== own);
   const usable = description && !/adobe creative cloud web add-on\.?$/i.test(String(description).trim()) ? String(description).trim() : "";
-  const summary = specific[0] || writtenSummary(name, brief || usable);
-  const sentence = specific.length > 1
-    ? `${name}. ${specific[0]}. ${specific[1]}.`
-    : specific.length === 1
-      ? `${name}. ${specific[0]}.`
-      : `${name}. ${writtenSummary(name, brief || usable)}`;
-  const words = `${featurePhrases(brief).join(" ")} ${specific.join(" ")} ${name}`.toLowerCase().match(/\b[a-z][a-z0-9-]{2,}\b/g) || [];
+  const summary = facts.length ? sentence(facts[0]) : usable ? sentence(usable) : specific[0] ? sentence(specific[0]) : sentence(`${name || "This add-on"} works in the add-on panel`);
+  const body = facts.length ? facts.slice(0, 4).map(sentence).join(" ") : usable ? sentence(usable) : specific.slice(0, 2).map(sentence).join(" ");
+  const text = `${name}. ${body}`.replace(/\s+/g, " ").trim();
+  const words = `${nouns.join(" ")} ${specific.join(" ")} ${name}`.toLowerCase().match(/\b[a-z][a-z0-9-]{2,}\b/g) || [];
   const keywords = [...new Set(words.filter((word) => !KEYWORD_SKIP.has(word) && !API_WORD.test(word)))].slice(0, 6);
-  return { name, summary, description: sentence.replace(/\s+/g, " ").trim(), keywords, brief: String(brief || "") };
+  return { name, summary, description: text, keywords, facts, brief: String(brief || "") };
 }
 
-export function fillListingDir(listingDir, addonDir) {
+const PANEL_SHOTS = ["panel-back.png", "panel-front.png", "panel-mid.png", "panel-third.png"];
+
+/**
+ * Fills the listing pages. `shotsDir` holds real panel captures from panel-capture.mjs. Without
+ * them nothing is written and the reason is returned: a drawn panel is not a picture of the add-on.
+ */
+export function fillListingDir(listingDir, addonDir, { shotsDir = "", shotsError = "" } = {}) {
   const phrases = phrasesFromAddon(addonDir);
+  const { facts } = featureFacts(addonDir);
   if (!phrases.length) return { ok: false, error: "The add-on has no phrase the listing can quote. The template's Get Started text is not a feature." };
   const files = fs.readdirSync(listingDir).filter((name) => name.endsWith(".html"));
   if (!files.length) return { ok: false, error: "prepare-listing did not write any pages." };
-  writePanelShots(listingDir, phrases);
-  for (const name of files) fillPage(path.join(listingDir, name), phrases);
+  const shots = PANEL_SHOTS.filter((name) => shotsDir && fs.existsSync(path.join(shotsDir, name)) && isPng(path.join(shotsDir, name)));
+  if (!shots.length) {
+    return { ok: false, error: shotsError || "No real picture of the panel was taken, so the listing images were not made. A drawn stand-in is not used." };
+  }
+  for (const name of shots) fs.copyFileSync(path.join(shotsDir, name), path.join(listingDir, name));
+  const slots = slotTexts(phrases);
+  for (const name of files) fillPage(path.join(listingDir, name), slots);
   const written = files.map((name) => fs.readFileSync(path.join(listingDir, name), "utf8")).join("\n");
   if (/Get Started/i.test(written)) return { ok: false, error: "The listing still shows the template's Get Started text. The screenshots are not done." };
-  return { ok: true, phrases };
+  return { ok: true, phrases, facts, slots, shots };
 }
 
-function fillPage(file, phrases) {
+function isPng(file) {
+  const head = Buffer.alloc(8);
+  const fd = fs.openSync(file, "r");
+  try { fs.readSync(fd, head, 0, 8, 0); } finally { fs.closeSync(fd); }
+  return head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+}
+
+/**
+ * Each slot on the pictures gets a different phrase quoted from the panel (the render lint only
+ * accepts quoted text). The add-on's name is used at most once. A slot with nothing left is removed.
+ */
+function slotTexts(phrases) {
+  const used = new Set();
+  const take = (list) => {
+    for (const item of list) {
+      const key = String(item).toLowerCase().replace(/[.!?]$/, "");
+      if (!item || used.has(key)) continue;
+      used.add(key);
+      return item;
+    }
+    return "";
+  };
+  const short = phrases.filter((phrase) => phrase.split(/\s+/).length <= 5);
+  const long = phrases.filter((phrase) => phrase.split(/\s+/).length > 3);
+  const kicker = take(short) || take(phrases);
+  const headline = take(phrases);
+  const line = take(long) || take(phrases);
+  const pills = [];
+  for (let n = 0; n < 3; n += 1) {
+    const pill = take(short);
+    if (pill) pills.push(pill);
+  }
+  return { kicker, headline, line, pills };
+}
+
+function fillPage(file, slots) {
   let html = fs.readFileSync(file, "utf8");
-  const pick = (index) => escapeHtml(phrases[index] || phrases[0]);
-  const swaps = [
-    ["Short phrase from the UI", pick(0)],
-    ["Real count or feature", pick(1)],
-    ["One sentence already written in the add-on.", pick(Math.min(2, phrases.length - 1))]
-  ];
-  for (const [from, to] of swaps) html = html.replace(from, to);
+  const swap = (marker, value) => {
+    if (value) {
+      html = html.replace(marker, escapeHtml(value));
+      return;
+    }
+    const pattern = new RegExp(`<([a-z0-9]+)([^>]*)>\\s*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*</\\1>`, "i");
+    html = pattern.test(html) ? html.replace(pattern, "") : html.replace(marker, "");
+  };
+  swap("Short phrase from the UI", slots.kicker);
+  swap("Real count or feature", slots.headline);
+  swap("One sentence already written in the add-on.", slots.line);
   let pill = 0;
-  html = html.replace(/>Fact</g, () => {
-    const phrase = pick(3 + pill);
+  html = html.replace(/<span>Fact<\/span>\s*/g, () => {
+    const text = slots.pills[pill];
     pill += 1;
-    return `>${phrase}<`;
+    return text ? `<span>${escapeHtml(text)}</span>\n        ` : "";
+  });
+  html = html.replace(/>Fact</g, () => {
+    const text = slots.pills[pill];
+    pill += 1;
+    return text ? `>${escapeHtml(text)}<` : "><";
   });
   const dir = path.dirname(file);
   html = html.replace(/<img\b[^>]*>/gi, (tag) => {
@@ -142,152 +257,6 @@ function fillPage(file, phrases) {
     return fs.existsSync(full) ? tag : "";
   });
   fs.writeFileSync(file, html);
-}
-
-const PANEL_SHOTS = ["panel-back.png", "panel-front.png", "panel-mid.png", "panel-third.png"];
-
-function writePanelShots(dir, phrases) {
-  const png = capturePanel(phrases);
-  for (const name of PANEL_SHOTS) fs.writeFileSync(path.join(dir, name), png);
-}
-
-function capturePanel(phrases) {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "express-panel-shot-"));
-  try {
-    const html = path.join(scratch, "panel.html");
-    const out = path.join(scratch, "panel.png");
-    fs.writeFileSync(html, panelPreviewHtml(phrases));
-    const chrome = findChrome();
-    if (chrome) {
-      try {
-        shoot({ chrome, url: pathToFileURL(html).href, out, width: 360, height: 480, timeout: 8000 });
-        if (fs.existsSync(out) && fs.statSync(out).size > 500) return fs.readFileSync(out);
-      } catch {
-        // A drawn panel of the same controls is used when Chrome cannot take the picture.
-      }
-    }
-    return drawPanel(phrases);
-  } finally {
-    fs.rmSync(scratch, { recursive: true, force: true });
-  }
-}
-
-function panelPreviewHtml(phrases) {
-  const labels = (phrases || []).map((phrase) => String(phrase || "").trim()).filter(Boolean).slice(0, 4);
-  const title = labels[0] || "Panel";
-  const buttons = (labels.length ? labels : ["Add heading"]).map((label) => `<button type="button">${escapeHtml(label)}</button>`).join("");
-  return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  html, body { margin: 0; background: #f4f1ea; color: #1c2430; font: 16px/1.4 "Segoe UI", sans-serif; }
-  .panel { width: 300px; margin: 24px; background: #fff; border: 1px solid #d7d2c8; border-radius: 16px; padding: 16px; }
-  h1 { font-size: 18px; margin: 0 0 12px; }
-  label { display: block; font-size: 12px; margin-bottom: 4px; }
-  input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #c5c0b6; border-radius: 8px; margin-bottom: 12px; }
-  button { display: inline-block; margin: 0 8px 8px 0; background: #3b63fb; color: #fff; border: 0; border-radius: 16px; padding: 8px 14px; font: inherit; }
-</style>
-</head>
-<body>
-  <div class="panel">
-    <h1>${escapeHtml(title)}</h1>
-    <label for="heading">Heading</label>
-    <input id="heading" value="">
-    ${buttons}
-  </div>
-</body>
-</html>
-`;
-}
-
-function drawPanel(phrases) {
-  const width = 360;
-  const height = 480;
-  const raw = Buffer.alloc((width * 3 + 1) * height);
-  const set = (x, y, r, g, b) => {
-    if (x < 0 || y < 0 || x >= width || y >= height) return;
-    const at = y * (width * 3 + 1) + 1 + x * 3;
-    raw[at] = r;
-    raw[at + 1] = g;
-    raw[at + 2] = b;
-  };
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) set(x, y, 244, 241, 234);
-  }
-  for (let y = 24; y < 456; y += 1) {
-    for (let x = 30; x < 330; x += 1) set(x, y, 255, 255, 255);
-  }
-  for (let y = 88; y < 124; y += 1) {
-    for (let x = 48; x < 312; x += 1) set(x, y, 255, 255, 255);
-    if (y === 88 || y === 123) for (let x = 48; x < 312; x += 1) set(x, y, 190, 186, 178);
-  }
-  for (let y = 148; y < 184; y += 1) {
-    for (let x = 48; x < 196; x += 1) set(x, y, 59, 99, 251);
-  }
-  const text = String((phrases && phrases[0]) || "Add heading").replace(/[^A-Za-z0-9 ]/g, " ").toUpperCase();
-  drawText(set, text, 56, 158, 3);
-  return pngEncode(width, height, raw);
-}
-
-function drawText(set, text, x, y, scale) {
-  let cursor = x;
-  for (const char of text) {
-    const glyph = GLYPHS[char] || GLYPHS[" "];
-    for (let row = 0; row < glyph.length; row += 1) {
-      for (let col = 0; col < glyph[row].length; col += 1) {
-        if (glyph[row][col] !== "1") continue;
-        for (let dy = 0; dy < scale; dy += 1) {
-          for (let dx = 0; dx < scale; dx += 1) set(cursor + col * scale + dx, y + row * scale + dy, 255, 255, 255);
-        }
-      }
-    }
-    cursor += (glyph[0].length + 1) * scale;
-  }
-}
-
-const GLYPHS = {
-  " ": ["000", "000", "000", "000", "000"],
-  A: ["010", "101", "111", "101", "101"],
-  B: ["110", "101", "110", "101", "110"],
-  C: ["011", "100", "100", "100", "011"],
-  D: ["110", "101", "101", "101", "110"],
-  E: ["111", "100", "110", "100", "111"],
-  F: ["111", "100", "110", "100", "100"],
-  G: ["011", "100", "101", "101", "011"],
-  H: ["101", "101", "111", "101", "101"],
-  I: ["111", "010", "010", "010", "111"],
-  L: ["100", "100", "100", "100", "111"],
-  M: ["101", "111", "101", "101", "101"],
-  N: ["110", "101", "101", "101", "101"],
-  O: ["010", "101", "101", "101", "010"],
-  P: ["110", "101", "110", "100", "100"],
-  R: ["110", "101", "110", "101", "101"],
-  S: ["011", "100", "010", "001", "110"],
-  T: ["111", "010", "010", "010", "010"],
-  U: ["101", "101", "101", "101", "111"]
-};
-
-function pngEncode(width, height, raw) {
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 2;
-  const crc = (type, data) => {
-    const body = Buffer.concat([Buffer.from(type), data]);
-    const sum = Buffer.alloc(4);
-    sum.writeUInt32BE(zlib.crc32(body) >>> 0, 0);
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length, 0);
-    return Buffer.concat([length, body, sum]);
-  };
-  return Buffer.concat([
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    crc("IHDR", ihdr),
-    crc("IDAT", zlib.deflateSync(raw)),
-    crc("IEND", Buffer.alloc(0))
-  ]);
 }
 
 function escapeHtml(value) {
