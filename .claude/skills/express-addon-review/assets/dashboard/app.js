@@ -282,17 +282,16 @@ function cycleTheme() {
 function paintTop() {
   const s = session();
   const r = report();
-  const sha = (s?.addon?.docsSha || r.docsSha || "").slice(0, 7);
   const fetched = s?.addon?.fetchedAt || r.fetchedAt;
   const when = fetched ? new Date(fetched).toLocaleDateString([], { month: "short", day: "numeric" }) : "";
   region(el.who, JSON.stringify([s?.addon?.name, r.addon, s?.addon?.path]), () => [
-    h("h1", { text: s?.addon?.name || r.addon || "Add-on Preflight" }),
+    h("h1", { text: s?.addon?.name || r.addon || (s?.kind === "develop" ? "Express add-on" : "Add-on Preflight") }),
     h("p", { class: "path", text: s?.addon?.path || "Waiting for a review to start" })
   ]);
   const conn = { live: ["ok", "Live", true], retry: ["warn", "Reconnecting"], down: ["bad", "Dashboard stopped"] }[ui.conn];
-  region(el.facts, JSON.stringify([ui.conn, ui.theme, s?.mode, sha, when]), () => [
+  region(el.facts, JSON.stringify([ui.conn, ui.theme, s?.mode, when, s?.docs?.counts]), () => [
     h("span", { class: "pill", text: s?.mode === "chat" ? "Decisions in chat" : "Decisions here" }),
-    h("span", { class: "pill", text: sha ? `Adobe docs ${sha}${when ? `, ${when}` : ""}` : "Adobe docs from cache" }),
+    h("span", { class: "pill", text: when ? `Adobe docs, ${when}` : "Adobe docs on this computer" }),
     s?.docs?.counts ? h("span", { class: "pill", text: `Docs ${s.docs.counts.fresh} fresh, ${s.docs.counts.stale} stale, ${s.docs.counts.failed} failed` }) : null,
     h("a", { class: "pill", href: fileUrl("report.md"), target: "_blank", rel: "noopener" }, icon("doc", 2), "Full report"),
     h("span", { class: "pill", role: "status", "data-tone": conn[0], "data-live": conn[2] ? "true" : "false" }, h("i", { class: "dot" }), conn[1]),
@@ -330,6 +329,11 @@ function paintRail() {
         live && step.progress ? progressBar(step.progress, { thin: true, live: true }) : null,
         took > 1500 ? h("p", { class: "took", text: `Took ${dur(took)}` }) : null));
   }));
+}
+
+function plainToken(value) {
+  const text = String(value || "");
+  return /^[a-f0-9]{8,}$/i.test(text) ? "" : text;
 }
 
 function statusWord(status) {
@@ -407,7 +411,7 @@ function paintHero() {
     if (finished()) {
       return [
         h("div", { class: "hero-top" }, h("div", { class: "hero-step" }, icon("check", 3), h("p", { class: "eyebrow", text: "Finished" }))),
-        h("h2", { id: "hero-title", text: "Review finished" }),
+        h("h2", { id: "hero-title", text: s.kind === "develop" ? "Build finished" : "Review finished" }),
         h("p", { class: "summary", text: s.summary || "Everything you chose is done." }),
         d.total || d.bugsFixed.length ? h("p", { class: "lede" }, [d.total ? `${d.fixed.length} of ${d.total} findings fixed` : "", d.total && d.bugsFixed.length ? ", " : "", d.bugsFixed.length ? `${d.bugsFixed.length} panel ${plural(d.bugsFixed.length, "bug")} confirmed fixed` : ""].join("") + ".") : null
       ];
@@ -470,7 +474,13 @@ function paintStats() {
   const list = visibleSteps().filter((step) => step.status !== "skipped");
   const done = list.filter((step) => step.status === "done").length;
   const audit = s?.audit;
-  const tiles = [
+  const counts = s?.docs?.counts;
+  const tiles = s?.kind === "develop" ? [
+    { tone: "work", icon: "doc", k: "Docs", v: counts ? String(counts.fresh + counts.stale + counts.failed) : "–", s: counts ? `${counts.fresh} fresh, ${counts.stale} stale, ${counts.failed} failed` : "Not fetched yet" },
+    { tone: s?.develop?.implemented ? "ok" : "work", icon: "layers", k: "Files written", v: Array.isArray(s?.develop?.files) ? s.develop.files.length : (s?.develop?.implemented ? "Yes" : "No"), s: "Nothing is written before you approve" },
+    { tone: "work", icon: "bug", k: "Panel walk", v: s?.develop?.audited ? (s.develop.auditBugs || []).length : "–", s: s?.develop?.standIn ? "SDK stand-in. Not an Express pass." : "Not walked yet" },
+    { tone: "work", icon: "layers", k: "Steps done", v: `${done}/${list.length}`, s: s?.startedAt ? "Running for " : "", since: s?.startedAt }
+  ] : [
     { tone: d.errors.length ? "bad" : "ok", icon: d.errors.length ? "x" : "check", k: "Code errors", v: d.errors.length, s: d.total ? `${d.fixed.length} of ${d.total} findings fixed` : "From the scan" },
     { tone: d.warnings.length ? "warn" : "ok", icon: d.warnings.length ? "alert" : "check", k: "Warnings", v: d.warnings.length, s: `${d.patterns.length} review ${plural(d.patterns.length, "pattern")}` },
     { tone: d.bugsOpen.length ? "bad" : audit ? "ok" : "work", icon: "bug", k: "Panel bugs open", v: audit || d.bugsOpen.length || d.bugsFixed.length ? d.bugsOpen.length : "–", s: audit ? `${d.bugsFixed.length} fixed, ${audit.screens ?? 0} ${plural(audit.screens ?? 0, "screen")} measured` : "Measured at 320px" },
@@ -551,7 +561,7 @@ function turn(ask) {
     ask.id === "listing-review" && s.listing ? listingBlock(s.listing) : null,
     form,
     ask.affects?.length ? h("details", { class: "will" }, h("summary", { text: `What this touches (${ask.affects.length})` }),
-      h("ul", null, ask.affects.map((item) => h("li", null, badge(item.severity), h("code", { text: `${item.file}${item.line ? `:${item.line}` : ""}` }), item.id)))) : null);
+      h("ul", null, ask.affects.map((item) => h("li", null, badge(item.severity), h("code", { text: `${item.file}${item.line ? `:${item.line}` : ""}` }), plainToken(item.id) ? ` ${plainToken(item.id)}` : "")))) : null);
   sync();
   return sheet;
 }
@@ -615,7 +625,7 @@ function findingsPane() {
   const rows = sets[ui.filter] || all;
   return h("div", null,
     h("div", { class: "chips", role: "group", "aria-label": "Filter findings" }, chip("all", "All"), chip("error", "Errors"), chip("warn", "Warnings"), chip("pattern", "Patterns"), d.fixed.length ? chip("fixed", "Fixed") : null),
-    rows.length ? h("ul", { class: "list" }, rows.map((row) => ui.filter === "fixed" ? fixedRow(row) : findingRow(row))) : h("p", { class: "empty", text: ui.filter === "fixed" ? "Nothing fixed yet." : "None found." }));
+    rows.length ? h("ul", { class: "list" }, rows.map((row) => ui.filter === "fixed" ? fixedRow(row) : findingRow(row))) : h("p", { class: "empty", text: ui.filter === "fixed" ? "Nothing fixed yet." : session()?.kind === "develop" ? "No code-error list for this build. Panel notes are on the Panel bugs tab." : "None found." }));
 }
 
 function findingRow(finding) {
@@ -623,7 +633,7 @@ function findingRow(finding) {
     badge(finding.severity),
     h("div", null,
       h("p", { class: "msg", text: finding.message || finding.id }),
-      h("p", { class: "where", text: `${finding.id}  ${finding.file}${finding.line ? `:${finding.line}` : ""}` }),
+      h("p", { class: "where", text: `${plainToken(finding.id) ? `${plainToken(finding.id)}  ` : ""}${finding.file}${finding.line ? `:${finding.line}` : ""}` }),
       finding.suggestion ? h("details", null, h("summary", { text: "Suggested edit" }), h("pre", { text: finding.suggestion })) : null),
     finding.url ? h("a", { class: "ext", href: finding.url, target: "_blank", rel: "noopener", text: finding.origin === "review-pattern" ? "Source" : "Guideline" }) : h("span"));
 }
@@ -732,7 +742,7 @@ function paintTitle() {
   const pending = s?.mode === "dashboard" && pendingAsk();
   const running = steps().find((step) => step.status === "running");
   const p = running?.progress;
-  let title = `${name} review`;
+  let title = `${name} ${s?.kind === "develop" ? "build" : "review"}`;
   let tone = "idle";
   if (finished()) { title = `Done · ${name}`; tone = "ok"; }
   else if (pending) { title = `Your turn · ${name}`; tone = "wait"; }

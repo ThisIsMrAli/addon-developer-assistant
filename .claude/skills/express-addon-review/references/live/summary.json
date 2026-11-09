@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-09T09:37:10.959Z",
+  "fetchedAt": "2026-11-09T10:23:34.184Z",
   "repo": "AdobeDocs/express-add-ons-docs",
   "branch": "main",
   "sha": "3f85ea24f55e6caba8711bee25a65de626fdc335",
@@ -541,7 +541,7 @@
       "stale": 0,
       "failed": 0
     },
-    "elapsedMs": 57,
+    "elapsedMs": 85,
     "budgetMs": 20000,
     "pages": [
       {

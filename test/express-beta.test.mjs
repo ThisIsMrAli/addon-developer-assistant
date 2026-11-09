@@ -56,7 +56,8 @@ test("the beta question offers run, and skip stays first", () => {
   assert.match(ask.options[0].detail, /listing/i);
   assert.equal(ask.options[1].id, "run");
   const result = expressResultAsk();
-  assert.equal(result.options.map((item) => item.id).join(","), "rendered,failed,skip");
+  assert.equal(result.options.map((item) => item.id).join(","), "skip,rendered,failed");
+  assert.match(result.options[0].label, /Recommended/);
   assert.match(result.prompt, /localhost:5241/);
   assert.match(result.prompt, /127\.0\.0\.1/);
   assert.match(result.prompt, /never takes credentials/i);

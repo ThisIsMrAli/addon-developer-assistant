@@ -32,7 +32,9 @@ The ids, in order:
 - `design` — `swc` or `leave`.
 - `implement` — `write` or `stop`.
 - `express` — "Run a real test in Adobe Express (beta)?" `skip` first, labelled recommended, then `run`.
-- `express-result` — only after a local run. The panel rendered and the feature was exercised, it failed or timed out, or stop. A pass also needs a screenshot of kind `express`.
+- `express-result` — only after a local run. Stop is the recommended first option. The other choices are that the panel rendered and the feature was exercised, or that it failed or timed out. A pass also needs a screenshot of kind `express`.
+
+Running `begin` again for the same folder resumes. It does not delete the add-on or the answers. `--empty` is only for an empty folder. One `current.json` points at the session, and starting another session stops the previous dashboard.
 - `listing` — the Preflight listing question. `listing-review` and `shots-review` follow when there is something to approve.
 
 On the dashboard, `ask` then `wait`. Do not call AskQuestion for that question. If `wait` returns `server-down`, ask in chat and record `answer`.

@@ -49,7 +49,7 @@ The headless audit does not open Adobe Express. A browser run of the panel is no
 node scripts/develop.mjs begin --dir /absolute/path --name "Name" --brief "What to add"
 ```
 
-   `--dir` is an empty folder, or an add-on that already has a manifest. Nothing is copied and nothing is fetched.
+   `--dir` is an empty folder, or an add-on that already has a manifest. `--empty` means the folder is a new add-on. It is refused when the folder is not empty, and nothing is deleted. A folder that already has a manifest skips the empty-folder question. Running `begin` again on the same folder resumes the session and does not wipe answers or project files. Nothing is copied and nothing is fetched.
 
 2. **Ask where to follow the build.** Call AskQuestion with the `mode` object in `questions.json`. Title is `Next step`. Pass `prompt` and each option's `id` and `label` through unchanged.
 

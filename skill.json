@@ -28,5 +28,5 @@
   ],
   "skillPath": ".claude/skills/express-addon-review",
   "developSkillPath": ".claude/skills/express-addon-develop",
-  "install": "npx skills add <owner>/express-addon-review --skill express-addon-review -a {{platform}}"
+  "install": "npx skills add <owner>/express-addon-review --skill express-addon-review --skill express-addon-develop -a {{platform}}"
 }

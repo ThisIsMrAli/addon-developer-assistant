@@ -75,7 +75,7 @@ export function createDashboardServer({ out, assets, token = crypto.randomBytes(
   function deny(res, req, url) {
     if (req.method === "GET" && url.pathname === "/") {
       res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      res.end("<!doctype html><meta charset=utf-8><title>Review dashboard</title><body style=\"font:16px system-ui;margin:3rem\"><h1>Open the link from the agent</h1><p>This page needs the private link the agent printed when it started the dashboard.</p>");
+      res.end("<!doctype html><meta charset=utf-8><title>Dashboard</title><body style=\"font:16px system-ui;margin:3rem\"><h1>Open the link from the agent</h1><p>This page needs the private link the agent printed when it started the dashboard.</p>");
       return;
     }
     send(res, 401, { error: "Missing or wrong token." });
