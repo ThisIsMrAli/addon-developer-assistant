@@ -11,7 +11,7 @@ const OPEN = new Set(["pending", "running", "waiting"]);
 export function nextAction(out, { dashboardUp = false } = {}) {
   const session = readMerged(out);
   if (!session) return { action: "start", say: "No review yet. Run review.mjs first." };
-  if (session.kind === "develop") return developNext(session, { dashboardUp });
+  if (session.kind === "develop") return developNext(session, { dashboardUp, out });
   const report = readReport(out) || {};
   const step = (id) => session.steps.find((item) => item.id === id);
   const dashboard = session.mode === "dashboard" && dashboardUp;

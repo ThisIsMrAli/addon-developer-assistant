@@ -464,3 +464,28 @@ dialog.lightbox::backdrop { background: rgba(5, 8, 20, 0.7); backdrop-filter: bl
   .spin { border-color: var(--primary-text); background: var(--primary-soft); }
   .bar.indeterminate > span { width: 100%; opacity: 0.4; }
 }
+
+/* Text answer field */
+.text-answer { margin-top: 18px; display: grid; gap: 8px; max-width: 640px; }
+.text-answer label { font-weight: 650; font-size: 14px; color: var(--text, inherit); }
+.text-answer input { width: 100%; box-sizing: border-box; height: 52px; padding: 0 16px; font-size: 16px; border-radius: 12px; border: 1.5px solid var(--line-strong); background: var(--surface); color: inherit; box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06); }
+.text-answer input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-soft); }
+.text-answer .actions { margin-top: 6px; display: flex; align-items: center; gap: 12px; }
+.text-answer .error:empty { display: none; }
+
+/* Spec list on the plan confirm card */
+.spec { margin: 8px 0 0; padding-left: 1.2em; display: grid; gap: 4px; color: var(--muted); font-size: 14px; line-height: 1.45; max-width: 720px; }
+.spec li { white-space: pre-wrap; }
+
+/* The try card: words and screenshots with the choice */
+.report { margin-top: 16px; display: grid; gap: 10px; max-width: 720px; }
+.report label { font-weight: 650; font-size: 14px; }
+.report textarea { width: 100%; box-sizing: border-box; min-height: 120px; padding: 12px 14px; font: inherit; line-height: 1.5; border-radius: 12px; border: 1.5px solid var(--line-strong); background: var(--surface); color: inherit; resize: vertical; }
+.report textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-soft); }
+.drop { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px; border-radius: 12px; border: 1.5px dashed var(--line-strong); background: var(--surface-2); }
+.drop[data-over="true"] { border-color: var(--primary); background: var(--primary-soft); }
+.attached { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.attached:empty { display: none; }
+.attached li { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); }
+.attached img { height: 56px; width: 96px; object-fit: cover; object-position: top; border-radius: 6px; border: 1px solid var(--line); }
+.attached .meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12.5px; }

@@ -94,15 +94,33 @@
   const disabled = (el) => el.disabled === true || el.getAttribute("aria-disabled") === "true";
 
   // ---- the dialog on top, if one is open ------------------------------------------------------
+  /** An open Spectrum picker or menu. At 320px the overlay can be role=dialog. It is still a menu. */
+  function isMenuSurface(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === "SP-MENU" || tag === "SP-POPOVER" || tag === "SP-ACTION-MENU" || tag === "SP-PICKER") return true;
+    const role = el.getAttribute("role") || "";
+    if (role === "menu" || role === "listbox") return true;
+    if (tag === "SP-OVERLAY" || tag === "SP-TRAY") {
+      const menu = el.querySelector && el.querySelector("sp-menu, sp-picker, [role='menu'], [role='listbox']");
+      const realDialog = el.querySelector && el.querySelector("sp-dialog, sp-dialog-wrapper");
+      if (menu && !realDialog) return true;
+    }
+    return false;
+  }
+  function inMenuSurface(el) {
+    for (let node = el; node && node.nodeType === 1; node = parentOf(node)) if (isMenuSurface(node)) return true;
+    return false;
+  }
   function findModal(all) {
     const candidates = all.filter((el) => {
       const role = el.getAttribute("role");
       const named = role === "dialog" || role === "alertdialog" || el.getAttribute("aria-modal") === "true" || (el.tagName === "DIALOG" && el.open) || el.tagName === "SP-DIALOG" || el.tagName === "SP-DIALOG-WRAPPER";
-      return named && visible(el);
+      return named && visible(el) && !inMenuSurface(el);
     });
     const loose = candidates.length ? [] : all.filter((el) => {
       const cls = typeof el.className === "string" ? el.className : "";
-      if (!/(^|[-_ ])(modal|dialog|popup)([-_ ]|$)/i.test(cls) || !visible(el)) return false;
+      if (!/(^|[-_ ])(modal|dialog|popup)([-_ ]|$)/i.test(cls) || !visible(el) || inMenuSurface(el)) return false;
       const style = getComputedStyle(el);
       const r = el.getBoundingClientRect();
       return (style.position === "fixed" || style.position === "absolute") && r.width * r.height >= 0.2 * innerWidth * innerHeight;

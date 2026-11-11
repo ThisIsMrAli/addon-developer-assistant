@@ -62,9 +62,10 @@ test("X3 a template is recommended for a stated reason", () => {
   assert.equal(text.id, "javascript-with-document-sandbox");
   assert.match(text.reason, /document sandbox/);
   assert.doesNotMatch(text.reason, /First name in the list/);
-  const form = recommendTemplate(ids, "Add a Spectrum panel with a form");
-  assert.equal(form.id, "swc-javascript");
+  const form = recommendTemplate(ids, "Add a Spectrum panel with a form", "swc");
+  assert.equal(form.id, "swc-javascript-with-document-sandbox");
   assert.match(form.reason, /Spectrum/);
+  assert.match(form.reason, /Express document/);
   const missing = recommendTemplate(["javascript"], "Add styled text to the document");
   assert.equal(missing.id, "javascript");
   assert.ok(ids.includes(text.id) || missing.id === "javascript");
@@ -202,7 +203,7 @@ test("X9 --name is written to the manifest", () => {
   assert.equal(run(developCli, ["docs", "--out", out], env, [preloadFixtures]).status, 0);
   assert.equal(run(developCli, ["templates", "--out", out], env, [preloadFixtures]).status, 0);
   assert.equal(run(developCli, ["classify", "--out", out], env).status, 0);
-  for (const [id, value] of [["origin", "new"], ["template", "javascript"], ["feasibility", "iframe"], ["design", "leave"], ["implement", "write"]]) {
+  for (const [id, value] of [["plan", "build"], ["design", "leave"], ["template", "javascript"]]) {
     assert.equal(run(sessionCli, ["ask", "--id", id, "--out", out], env).status, 0);
     assert.equal(run(sessionCli, ["answer", "--id", id, "--value", value, "--out", out], env).status, 0);
   }

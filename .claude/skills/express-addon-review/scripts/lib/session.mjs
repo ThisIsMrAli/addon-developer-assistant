@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { imageSize } from "./images.mjs";
+import { imageSize, sniffImage } from "./images.mjs";
 import { planAsks } from "./ask.mjs";
+
+export const ATTACH_LIMITS = { images: 6, imageBytes: 5 * 1024 * 1024, text: 4000 };
 
 /**
  * One review session lives in one folder:
@@ -90,7 +92,7 @@ export function readMerged(out) {
     const answer = answers.find((line) => line.type === "answer" && line.askId === ask.id && line.nonce === ask.nonce);
     if (!answer) return { ...ask, status: "pending" };
     const delivered = answers.find((line) => line.type === "delivered" && line.askId === ask.id && line.nonce === ask.nonce);
-    const option = ask.options.find((item) => item.id === answer.value);
+    const option = (ask.options || []).find((item) => item.id === answer.value);
     return {
       ...ask,
       status: "answered",
@@ -99,6 +101,8 @@ export function readMerged(out) {
       via: answer.via,
       answeredAt: answer.at,
       hasSecret: Boolean(answer.secret),
+      ...(answer.text ? { answerText: answer.text } : {}),
+      ...(answer.images?.length ? { answerImages: answer.images } : {}),
       deliveredAt: delivered?.at || null
     };
   });
@@ -323,12 +327,21 @@ export function publishAsk(out, ask) {
     id: ask.id,
     nonce,
     title: ask.title || "",
+    kicker: ask.kicker || "",
     prompt: ask.prompt,
-    options: ask.options.map((option) => ({
+    input: ask.input || "",
+    maxLength: ask.maxLength || 500,
+    ...(ask.attach ? { attach: true } : {}),
+    ...(ask.round ? { round: ask.round } : {}),
+    ...(ask.when ? { when: ask.when } : {}),
+    options: (ask.options || []).map((option) => ({
       id: option.id,
       label: option.label,
       detail: option.detail || "",
-      secret: option.secret || ""
+      secret: option.secret || "",
+      ...(option.ends ? { ends: true } : {}),
+      ...(option.repeat ? { repeat: true } : {}),
+      ...(option.then ? { then: option.then } : {})
     })),
     affects: ask.affects || [],
     images: ask.images || [],
@@ -345,20 +358,89 @@ export function publishAsk(out, ask) {
   return { session, ask: normalized };
 }
 
+export function answerFields(ask, value, via, extra = {}) {
+  return {
+    type: "answer",
+    askId: ask.id,
+    nonce: ask.nonce,
+    value,
+    via,
+    at: now(),
+    ...extra
+  };
+}
+
 /** Record an answer given in chat, so the session shows what was decided and how. */
-export function answerFromChat(out, id, value) {
+export function answerFromChat(out, id, value, extra = {}) {
   const session = readSession(out);
   const ask = session?.asks.find((item) => item.id === id);
   if (!ask) throw new Error(`No question named ${id}. Publish it with the ask command first.`);
+  if (ask.input === "text") {
+    const text = String(value || "").trim();
+    if (!text || text.length > (ask.maxLength || 500)) throw new Error("That text is empty or too long.");
+    appendAnswerLine(out, answerFields(ask, text, "chat"));
+    mutate(out, (draft) => {
+      const step = stepForAsk(id, draft);
+      if (step) setStepIn(draft, step, "running", `You answered: ${text.slice(0, 80)}`);
+      log(draft, step, `You answered a text question.`);
+    });
+    return { id: text, label: text };
+  }
   const option = matchOption(ask, value);
   if (!option) throw new Error(`"${value}" is not one of: ${ask.options.map((item) => item.id).join(", ")}.`);
-  appendAnswerLine(out, { type: "answer", askId: ask.id, nonce: ask.nonce, value: option.id, via: "chat", at: now() });
+  const attached = ask.attach ? attachmentFields(out, ask, option, extra) : {};
+  appendAnswerLine(out, answerFields(ask, option.id, "chat", attached));
   mutate(out, (draft) => {
     const step = stepForAsk(id, draft);
     if (step) setStepIn(draft, step, "running", `You chose: ${plainLabel(option.label)}`);
     log(draft, step, `You chose: ${plainLabel(option.label)}.`);
+    // Only the develop try/feedback loop settles itself; Preflight steps stay running until next applies them.
+    if (draft.kind === "develop" && step === "try") settleStep(out, draft, step);
   });
   return option;
+}
+
+/** Words and screenshots that travel with a choice. */
+function attachmentFields(out, ask, option, { text = "", images = [] } = {}) {
+  const words = String(text || "").trim();
+  if (words.length > ATTACH_LIMITS.text) throw new Error(`Keep the text under ${ATTACH_LIMITS.text} characters.`);
+  if (images.length > ATTACH_LIMITS.images) throw new Error(`Send at most ${ATTACH_LIMITS.images} screenshots.`);
+  if (option.repeat && !words && !images.length) throw new Error("Say what is wrong in words, or add a screenshot.");
+  const saved = saveFeedbackImages(out, ask, images.map((file) => (Buffer.isBuffer(file) ? file : fs.readFileSync(path.resolve(file)))));
+  return { ...(words ? { text: words } : {}), ...(saved.length ? { images: saved } : {}) };
+}
+
+/** Write each image under shots/ with a name the dashboard may serve. Returns the session-relative paths. */
+export function saveFeedbackImages(out, ask, buffers) {
+  const dir = path.join(out, "shots");
+  fs.mkdirSync(dir, { recursive: true });
+  return buffers.map((buf, index) => {
+    if (buf.length > ATTACH_LIMITS.imageBytes) throw new Error(`Screenshot ${index + 1} is over ${ATTACH_LIMITS.imageBytes / 1024 / 1024} MB.`);
+    const kind = sniffImage(buf);
+    if (!kind) throw new Error(`Screenshot ${index + 1} is not a PNG, JPEG, or WebP image.`);
+    const name = `fb-${ask.nonce}-${index + 1}.${kind.ext}`;
+    fs.writeFileSync(path.join(dir, name), buf);
+    return `shots/${name}`;
+  });
+}
+
+/**
+ * A report from the developer becomes a note. Safe to call twice.
+ */
+export function noteFeedback(out, id) {
+  const ask = readMerged(out)?.asks.find((item) => item.id === id && item.status === "answered");
+  if (!ask?.attach) return null;
+  const option = ask.options.find((item) => item.id === ask.answer);
+  if (!option?.repeat || (!ask.answerText && !ask.answerImages?.length)) return null;
+  const noteId = `fb${ask.round || 1}`;
+  addNote(out, {
+    id: noteId,
+    text: ask.answerText || "Screenshot only. Read it and find what is wrong.",
+    screen: `Your report, round ${ask.round || 1}`,
+    shot: ask.answerImages?.[0] || "",
+    severity: "error"
+  });
+  return noteId;
 }
 
 /**
@@ -375,7 +457,27 @@ export function noteDelivered(out, id, label, via) {
     // The step said "Waiting for your answer". Replace it, or it keeps saying so while the agent works.
     setStepIn(draft, step, "running", `You chose: ${plainLabel(label)}`);
     log(draft, step, `You chose: ${plainLabel(label)}${via === "dashboard" ? " on the dashboard" : ""}.`);
+    if (draft.kind === "develop" && step === "try") settleStep(out, draft, step);
   });
+}
+
+function settleStep(out, draft, stepId) {
+  if (!stepId) return;
+  // Develop steps (except the try/feedback loop) are closed by `next` with done or skipped.
+  // Auto-closing them here would turn an intentional "skipped" into "done".
+  if (draft.kind === "develop" && stepId !== "try") return;
+  const published = (draft.asks || []).filter((ask) => stepForAsk(ask.id, draft) === stepId);
+  if (!published.length) return;
+  const lines = readAnswers(out);
+  const open = published.some((ask) => !lines.some((line) => line.type === "answer" && line.askId === ask.id && line.nonce === ask.nonce));
+  if (open) return;
+  const again = published.some((ask) => {
+    const line = lines.find((item) => item.type === "answer" && item.askId === ask.id && item.nonce === ask.nonce);
+    return ask.options.find((item) => item.id === line?.value)?.repeat;
+  });
+  if (again) return;
+  const detail = draft.steps.find((step) => step.id === stepId)?.detail || "";
+  setStepIn(draft, stepId, "done", detail);
 }
 
 const plainLabel = (label) => String(label || "").replace(/\s*\(recommended\)\s*$/i, "");
@@ -400,11 +502,19 @@ export function stepForAsk(id, draft) {
   if (draft?.kind === "develop") {
     if (id === "mode") return null;
     const known = {
+      goal: "planning",
+      name: "planning",
+      description: "planning",
+      "feat-layout": "planning",
+      "feat-token": "planning",
+      plan: "plan",
+      tweak: "plan",
       origin: "origin",
       template: "template",
       feasibility: "feasibility",
       design: "design",
       implement: "implement",
+      feedback: "try",
       express: "express",
       "express-result": "express",
       listing: "listing",
@@ -413,6 +523,7 @@ export function stepForAsk(id, draft) {
       "audit-fix": "audit"
     };
     if (known[id]) return known[id];
+    if (String(id).startsWith("feat-")) return "planning";
     return draft.steps.find((step) => step.status === "running")?.id || null;
   }
   if (id === "credentials") return "access";

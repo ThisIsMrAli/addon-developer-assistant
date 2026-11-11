@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { implementationHandoff, TEXT_INSIDE_PAGE, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
 import { pagesForBrief } from "../.claude/skills/express-addon-develop/scripts/lib/docs-live.mjs";
+import { fetchSpectrumCatalog, tagsFromExports } from "../.claude/skills/express-addon-develop/scripts/lib/spectrum-catalog.mjs";
+import { spectrumProblems } from "../.claude/skills/express-addon-develop/scripts/lib/spectrum.mjs";
 
 function addon(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feature-accept-"));
@@ -130,6 +132,53 @@ test("a Spectrum panel form is accepted only with a Spectrum control", () => {
   const rejected = verifyFeature({ dir: stub, brief });
   assert.equal(rejected.ok, false);
   assert.match(rejected.problems.join(" "), /stub|Spectrum/);
+});
+
+test("Spectrum is the component set, so a wall of buttons is not a finished panel", () => {
+  const brief = "Make QR codes for the current page";
+  const handoff = implementationHandoff({ brief, design: "swc" });
+  const note = handoff.apis.map((item) => item.note).join(" ");
+  assert.match(note, /sp-tabs/);
+  assert.match(note, /sp-picker/);
+  assert.match(note, /sp-button is only a real action|only a real action/);
+  const buttons = addon({
+    "manifest.json": manifest(),
+    "index.html": "<!doctype html><html><body><sp-theme><sp-button>Quiet</sp-button><sp-button>Bold</sp-button><sp-button>Poster</sp-button><sp-button>Story</sp-button><sp-button>Make</sp-button></sp-theme></body></html>\n"
+  });
+  const wall = verifyFeature({ dir: buttons, brief, design: "swc" });
+  assert.equal(wall.ok, false);
+  assert.match(wall.problems.join(" "), /sp-tabs|sp-picker/);
+  const picked = addon({
+    "manifest.json": manifest(),
+    "index.html": "<!doctype html><html><body><sp-theme><sp-tabs><sp-tab label=\"Style\"></sp-tab></sp-tabs><sp-picker label=\"Type\"><sp-menu-item>Poster</sp-menu-item></sp-picker><sp-button>Make codes</sp-button></sp-theme></body></html>\n"
+  });
+  const ok = verifyFeature({ dir: picked, brief, design: "swc" });
+  assert.equal(ok.ok, true, ok.problems.join(" "));
+});
+
+test("the Spectrum catalog is the published bundle, and a component outside the short examples still counts", async () => {
+  assert.deepEqual(tagsFromExports({ "./sp-accordion.js": {}, "./sp-accordion-item.js": {}, "./package.json": {} }), ["sp-accordion", "sp-accordion-item"]);
+  const catalog = await fetchSpectrumCatalog({
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.endsWith("/bundle/latest")) {
+        return { ok: true, json: async () => ({ version: "9.9.9", dependencies: { "@spectrum-web-components/accordion": "1.0.0", "@spectrum-web-components/table": "1.0.0" } }) };
+      }
+      if (href.includes("/accordion/")) return { ok: true, json: async () => ({ exports: { "./sp-accordion.js": {}, "./sp-accordion-item.js": {} } }) };
+      if (href.includes("/table/")) return { ok: true, json: async () => ({ exports: { "./sp-table.js": {}, "./sp-table-row.js": {}, "./sp-table-cell.js": {} } }) };
+      throw new Error(href);
+    }
+  });
+  assert.equal(catalog.ok, true);
+  assert.equal(catalog.version, "9.9.9");
+  const tags = new Set(catalog.components.map((item) => item.tag));
+  assert.ok(tags.has("sp-table"));
+  assert.ok(tags.has("sp-accordion-item"));
+  assert.deepEqual(spectrumProblems("<sp-theme><sp-table><sp-table-row><sp-table-cell>Codes</sp-table-cell></sp-table-row></sp-table></sp-theme>", tags), []);
+  assert.match(spectrumProblems("<sp-theme><sp-not-a-component></sp-not-a-component></sp-theme>", tags).join(" "), /not in the fetched Spectrum catalog/);
+  const handoff = implementationHandoff({ brief: "QR codes", design: "swc", catalog: { version: "9.9.9", components: catalog.components, markdown: "/tmp/catalog.md" } });
+  assert.equal(handoff.spectrum.count, catalog.components.length);
+  assert.match(handoff.apis.map((item) => item.note).join(" "), /not the whole set/);
 });
 
 test("a network or OAuth feature is accepted only with manifest permissions", () => {

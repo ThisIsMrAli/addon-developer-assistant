@@ -280,16 +280,17 @@ test("the printed next lines reach the handoff", { timeout: 300000 }, () => {
   assert.equal(began.status, 0, began.stdout + began.stderr);
   assert.match(jsonOf(began).next, /session\.mjs mode --set/);
   const answers = {
+    plan: "build",
     origin: "new",
     template: "javascript",
     feasibility: "iframe",
     design: "leave",
-    implement: "write",
+    feedback: "good",
     express: "skip",
     listing: "skip"
   };
   const actions = [];
-  for (let i = 0; i < 40; i += 1) {
+  for (let i = 0; i < 64; i += 1) {
     const next = runAt(["scripts/session.mjs", "next"], env);
     assert.equal(next.status, 0, next.stdout + next.stderr);
     const action = jsonOf(next);
@@ -321,11 +322,16 @@ test("the printed next lines reach the handoff", { timeout: 300000 }, () => {
         fs.writeFileSync(htmlNow, source.includes("</body>") ? source.replace("</body>", `${block}</body>`) : `${source}\n${block}`);
       }
     }
+    if (String(action.command || "").includes("develop.mjs feedback")) {
+      const skipped = runAt(["scripts/develop.mjs", "feedback", "--skip"], env);
+      assert.equal(skipped.status, 0, skipped.stdout + skipped.stderr);
+      continue;
+    }
     assert.ok(action.command, JSON.stringify(action));
     const ran = runPrinted(action.command, env);
     assert.equal(ran.status, 0, `${action.command}\n${ran.stdout}\n${ran.stderr}`);
     assert.match(ran.stdout, /"next"/);
-    if (i === 39) assert.fail(actions.join(" > "));
+    if (i === 63) assert.fail(actions.join(" > "));
   }
   assert.equal(actions.at(-1), "finished");
   assert.equal(actions.includes("ask-in-chat:express"), true);
@@ -348,7 +354,9 @@ test("the printed next lines reach the handoff", { timeout: 300000 }, () => {
   assert.equal(record.rendered, process.env.SKIP_BROWSER_TESTS ? false : true);
   assert.notEqual(record.capturedOn, "cloud");
   const resumed = jsonOf(runAt(["scripts/develop.mjs", "begin", "--dir", dir, "--name", "caption-addon", "--brief", "Add a caption field to the panel", "--out", out], env));
-  assert.equal(resumed.resumed, true);
+  assert.equal(resumed.resumed, undefined);
+  assert.notEqual(resumed.out, out);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(resumed.out, "session.json"), "utf8")).steps.find((step) => step.id === "done").status, "pending");
   assert.match(fs.readFileSync(htmlPath, "utf8"), /KEEP/);
 });
 

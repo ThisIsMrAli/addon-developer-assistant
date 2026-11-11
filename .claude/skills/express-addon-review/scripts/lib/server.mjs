@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { appendAnswerLine, files, matchOption, now, readMerged, readReport, readSession } from "./session.mjs";
+import { ATTACH_LIMITS, answerFields, appendAnswerLine, files, matchOption, now, readMerged, readReport, readSession, saveFeedbackImages } from "./session.mjs";
 
 const MAX_BODY = 64 * 1024;
+// Only a question that takes screenshots may send a larger body: six images of up to 5 MB, as base64.
+const MAX_ATTACH_BODY = Math.ceil(ATTACH_LIMITS.images * ATTACH_LIMITS.imageBytes * 1.4) + 64 * 1024;
 const IMAGE_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 const ASSET_TYPES = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
@@ -138,16 +140,41 @@ export function createDashboardServer({ out, assets, token = crypto.randomBytes(
   async function answer(req, res) {
     if (!/^application\/json/i.test(req.headers["content-type"] || "")) return send(res, 415, { error: "Send JSON." });
     let body;
+    const roomy = readMerged(out)?.asks.some((item) => item.attach && item.status === "pending");
     try {
-      body = JSON.parse(await readBody(req));
-    } catch {
-      return send(res, 400, { error: "That body is not JSON." });
+      body = JSON.parse(await readBody(req, roomy ? MAX_ATTACH_BODY : MAX_BODY));
+    } catch (error) {
+      return send(res, /too large/i.test(error.message) ? 413 : 400, { error: /too large/i.test(error.message) ? "That is too large to send. Use fewer or smaller screenshots." : "That body is not JSON." });
     }
     const session = readMerged(out);
     const ask = session?.asks.find((item) => item.id === body.id && item.status === "pending");
     if (!ask) return send(res, 409, { error: "That question is not waiting for an answer." });
+    if (ask.input === "text") {
+      const value = String(body.value || "").trim();
+      if (!value || value.length > (ask.maxLength || 500)) return send(res, 400, { error: "Enter the text for this question." });
+      appendAnswerLine(out, answerFields(ask, value, "dashboard"));
+      wake();
+      return send(res, 200, { ok: true });
+    }
     const option = matchOption(ask, body.value);
     if (!option) return send(res, 400, { error: "That is not one of the choices." });
+    if (ask.attach) {
+      const text = String(body.text || "").trim();
+      if (text.length > ATTACH_LIMITS.text) return send(res, 400, { error: `Keep the text under ${ATTACH_LIMITS.text} characters.` });
+      const given = Array.isArray(body.images) ? body.images : [];
+      if (given.length > ATTACH_LIMITS.images) return send(res, 400, { error: `Add at most ${ATTACH_LIMITS.images} screenshots.` });
+      if (option.repeat && !text && !given.length) return send(res, 400, { error: "Say what is wrong in words, or add a screenshot." });
+      let saved = [];
+      try {
+        const buffers = given.map((item) => Buffer.from(String(item?.data || "").replace(/^data:[^,]*,/, ""), "base64"));
+        saved = saveFeedbackImages(out, ask, buffers);
+      } catch (error) {
+        return send(res, 400, { error: error.message });
+      }
+      appendAnswerLine(out, answerFields(ask, option.id, "dashboard", { ...(text ? { text } : {}), ...(saved.length ? { images: saved } : {}) }));
+      wake();
+      return send(res, 200, { ok: true, images: saved.length });
+    }
     let secret = "";
     if (option.secret) {
       secret = String(body.secret || "");
@@ -155,7 +182,7 @@ export function createDashboardServer({ out, assets, token = crypto.randomBytes(
       if (secret.length > 2000) return send(res, 400, { error: "That is too long." });
       secrets.set(ask.nonce, secret);
     }
-    appendAnswerLine(out, { type: "answer", askId: ask.id, nonce: ask.nonce, value: option.id, via: "dashboard", secret: Boolean(secret), at: now() });
+    appendAnswerLine(out, answerFields(ask, option.id, "dashboard", secret ? { secret: true } : {}));
     wake();
     return send(res, 200, { ok: true });
   }
@@ -175,6 +202,8 @@ export function createDashboardServer({ out, assets, token = crypto.randomBytes(
         if (!ask.deliveredAt) appendAnswerLine(out, { type: "delivered", askId: ask.id, nonce: ask.nonce, at: now() });
         return {
           status: "answered", id, value: ask.answer, label: ask.answerLabel, via: ask.via,
+          ...(ask.answerText ? { text: ask.answerText } : {}),
+          ...(ask.answerImages?.length ? { images: ask.answerImages } : {}),
           ...(ask.hasSecret ? { secretHeld: secrets.has(ask.nonce), secretNote: "The secret is held by the dashboard. `audit.mjs --licensed` reads it itself. Do not ask for it again." } : {})
         };
       }
@@ -303,13 +332,13 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         reject(new Error("Body too large."));
         req.destroy();
         return;

@@ -12,8 +12,10 @@ import { fetchTemplates } from "../.claude/skills/express-addon-develop/scripts/
 import { readSession } from "../.claude/skills/express-addon-review/scripts/lib/session.mjs";
 import { project } from "./helpers.mjs";
 import {
-  blockFetch, dashboardCli, developCli, developSkill, drive, preloadFixtures, reviewCli, reviewSkill, run, sessionCli, setupCli
+  blockFetch, dashboardCli, developCli, developSkill, drive, preloadFixtures, reviewCli, reviewSkill, run, seedLiveDocs, sessionCli, setupCli
 } from "./drive-develop.mjs";
+
+seedLiveDocs();
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TIMES = path.join(root, "measurements.json");
@@ -49,7 +51,7 @@ test("begin makes no network call, and mode is the first action", () => {
   assert.equal(session.mode, null);
   assert.equal(session.docs, null);
   const ids = session.steps.map((step) => step.id);
-  assert.deepEqual(ids, ["docs", "origin", "template", "feasibility", "design", "implement", "build", "package", "audit", "express", "listing", "done"]);
+  assert.deepEqual(ids, ["planning", "plan", "docs", "design", "template", "implement", "build", "package", "audit", "try", "express", "listing", "done"]);
   const next = run(sessionCli, ["next", "--out", out], env);
   assert.equal(next.json.action, "ask-mode");
   assert.equal(next.json.command, undefined);
@@ -78,12 +80,24 @@ test("the Express step is immediately before listing, and skip goes straight to 
   assert.match(questions.find((item) => item.id === "listing").prompt, /screenshot/i);
 
   const walked = drive(out, env, { imports: [preloadFixtures], audit: "skip" });
-  assert.deepEqual(walked.asked, ["origin", "template", "feasibility", "design", "implement", "express", "listing"]);
+  assert.ok(walked.asked.includes("plan"), `asked: ${walked.asked.join(",")}`);
+  assert.equal(walked.asked.includes("origin"), false);
+  assert.equal(walked.asked.includes("feasibility"), false);
+  assert.ok(walked.asked.includes("design"));
+  assert.ok(walked.asked.includes("template"));
+  assert.ok(walked.asked.indexOf("design") < walked.asked.indexOf("template"));
+  assert.ok(walked.asked.includes("express"));
+  assert.ok(walked.asked.includes("listing"));
+  assert.equal(walked.asked.includes("implement"), false, "implement write/stop was replaced by the plan confirm card");
+  const planAt = walked.asked.indexOf("plan");
+  const designAt = walked.asked.indexOf("design");
+  assert.ok(planAt < designAt, "confirm the spec before design");
   const expressAt = walked.actions.indexOf("ask-in-chat:express");
   assert.equal(walked.actions[expressAt + 1], "ask-in-chat:listing");
   assert.equal(walked.actions[0], "ask-mode");
   const docsAt = walked.actions.indexOf("run");
   assert.ok(docsAt > 0, "docs run after mode");
+  assert.ok(walked.asked.indexOf("plan") < walked.asked.indexOf("express"), "plan before express");
   const finished = readSession(out);
   assert.equal(finished.steps.find((step) => step.id === "express").status, "skipped");
   assert.equal(finished.develop.expressPass, false);
@@ -103,7 +117,7 @@ test("dashboard mode asks on the dashboard, and a stopped server falls back to A
   const started = run(dashboardCli, ["start", "--out", out, "--no-open"], env);
   assert.equal(started.status, 0, started.stdout + started.stderr);
   try {
-    const ask = run(sessionCli, ["ask", "--id", "origin", "--out", out], env);
+    const ask = run(sessionCli, ["ask", "--id", "design", "--out", out], env);
     assert.equal(ask.status, 0, ask.stdout + ask.stderr);
     assert.equal(ask.json.channel, "dashboard");
     assert.doesNotMatch(ask.stdout, /AskQuestion/);
@@ -112,7 +126,7 @@ test("dashboard mode asks on the dashboard, and a stopped server falls back to A
   } finally {
     run(dashboardCli, ["stop", "--out", out], env);
   }
-  const waited = run(sessionCli, ["wait", "--id", "origin", "--timeout", "1", "--out", out], env);
+  const waited = run(sessionCli, ["wait", "--id", "design", "--timeout", "1", "--out", out], env);
   assert.equal(waited.json.status, "server-down");
   assert.match(waited.stdout, /AskQuestion/);
 });
@@ -195,11 +209,55 @@ test("template ids are parsed from the fetched source, and the module has no bui
 test("a template that was not in the fetch is refused", () => {
   const answered = (id, answer) => ({ id, status: "answered", answer });
   const decision = gate({
-    asks: [answered("origin", "new"), answered("template", "not-published"), answered("feasibility", "iframe"), answered("design", "leave"), answered("implement", "write")],
-    templates: { ids: ["javascript"] }
+    asks: [answered("plan", "build"), answered("template", "not-published"), answered("design", "leave")],
+    templates: { ids: ["javascript"] },
+    develop: { folder: "empty" },
+    feasibility: { class: "sandbox" }
   });
   assert.equal(decision.ok, false);
   assert.match(decision.error, /not-published/);
+});
+
+test("planning asks only what the goal left open, and Build it is required before docs", () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "develop-out-"));
+  const env = isolatedEnv(out);
+  const began = run(developCli, ["begin", "--dir", emptyDir(), "--goal", "Add a caption field to the panel", "--name", "Caption Panel", "--out", out], env, [blockFetch]);
+  assert.equal(began.status, 0, began.stdout + began.stderr);
+  const questions = JSON.parse(fs.readFileSync(path.join(out, "questions.json"), "utf8"));
+  assert.equal(questions.some((item) => item.id === "goal"), false, "a clear goal is not asked again");
+  assert.equal(questions.some((item) => item.id === "name"), false, "a real name is not asked again");
+  const plan = questions.find((item) => item.id === "plan");
+  assert.ok(plan);
+  assert.equal(plan.options[0].id, "build");
+  assert.match(plan.prompt, /Caption Panel/);
+  assert.match(plan.prompt, /caption field/i);
+  assert.equal(run(sessionCli, ["mode", "--set", "chat", "--out", out], env).status, 0);
+  const next = run(sessionCli, ["next", "--out", out], env);
+  assert.ok(["run", "ask", "ask-in-chat"].includes(next.json.action), next.stdout);
+  assert.match(`${next.json.command || ""} ${next.json.say || ""}`, /refresh-plan|plan/);
+});
+
+test("a finished session starts a new one on the same folder and does not delete it", () => {
+  const dir = emptyDir();
+  fs.writeFileSync(path.join(dir, ".gitkeep"), "");
+  const env = isolatedEnv(fs.mkdtempSync(path.join(os.tmpdir(), "develop-out-")));
+  const first = run(developCli, ["begin", "--dir", dir, "--name", "Again", "--brief", "caption", "--empty"], env, [blockFetch]);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.equal(first.json.resumed, undefined);
+  const done = run(sessionCli, ["done", "--summary", "Finished the first one", "--out", first.json.out], env);
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  const second = run(developCli, ["begin", "--dir", dir, "--name", "Again", "--brief", "A new caption", "--empty", "--out", first.json.out], env, [blockFetch]);
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.equal(second.json.resumed, undefined);
+  assert.notEqual(second.json.out, first.json.out);
+  const session = readSession(second.json.out);
+  assert.equal(session.mode, null);
+  assert.equal(session.steps.find((step) => step.id === "done").status, "pending");
+  assert.equal(readSession(first.json.out).steps.find((step) => step.id === "done").status, "done");
+  assert.equal(fs.existsSync(dir), true);
+  const again = run(developCli, ["begin", "--dir", dir, "--name", "Again", "--brief", "A new caption", "--empty", "--out", second.json.out], env, [blockFetch]);
+  assert.equal(again.json.resumed, true);
+  assert.equal(again.json.out, second.json.out);
 });
 
 test("the Linux setup command does not open Express and does not disable the Chrome flag", () => {

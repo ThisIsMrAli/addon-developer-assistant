@@ -24,7 +24,7 @@ import { fixAskFor, lateAsks } from "./lib/ask.mjs";
 import { nextAction, reminder } from "./lib/next.mjs";
 import { resolveOut } from "./lib/paths.mjs";
 import {
-  addNote, addShot, answerFromChat, finish, noteDelivered, parseProgress, publishAsk, readMerged, readReport, readServer, readSession, setListing, setMode, setNoteStatus, setStep
+  addNote, addShot, answerFromChat, finish, noteDelivered, noteFeedback, parseProgress, publishAsk, readMerged, readReport, readServer, readSession, setListing, setMode, setNoteStatus, setStep
 } from "./lib/session.mjs";
 
 const [command, ...rest] = process.argv.slice(2);
@@ -79,10 +79,31 @@ async function run(out) {
     case "ask": return ask(out);
     case "wait": return wait(out);
     case "answer": {
-      if (!args.id || !args.value) throw new Error("Use --id and --value.");
+      if (!args.id || args.value === undefined) throw new Error("Use --id and --value.");
       ensureAsk(out);
-      const option = answerFromChat(out, args.id, args.value);
-      return print({ ok: true, id: args.id, value: option.id, label: option.label, via: "chat" }, out);
+      const images = [];
+      for (const file of args.image || []) images.push(file);
+      const option = answerFromChat(out, args.id, args.value, {
+        text: typeof args.text === "string" ? args.text : "",
+        images
+      });
+      const noted = noteFeedback(out, args.id);
+      const ask = readMerged(out)?.asks.find((item) => item.id === args.id);
+      const chosen = ask?.options?.find((item) => item.id === option.id);
+      if (ask?.attach && chosen && !chosen.repeat) {
+        for (const note of (readSession(out).notes || []).filter((item) => /^fb\d/.test(item.id) && (item.status === "open" || item.fixedBy === "agent"))) {
+          setNoteStatus(out, note.id, "fixed", "developer");
+        }
+      }
+      return print({
+        ok: true,
+        id: args.id,
+        value: option.id,
+        label: option.label,
+        via: "chat",
+        ...(noted ? { note: noted } : {}),
+        ...(chosen?.then ? { next: chosen.then } : {})
+      }, out);
     }
     case "done": {
       finish(out, args.summary);
@@ -157,8 +178,8 @@ async function wait(out) {
       });
       const body = await res.json();
       if (body.status === "pending") body.next = "Not answered yet. The user has not clicked. Run the same wait command again right now. Do not write to the user.";
-      if (body.status === "answered") noteDelivered(out, args.id, body.label, body.via);
-      return print(body, body.status === "answered" ? out : undefined);
+      if (body.status === "answered") return print(delivered(out, args.id, body), out);
+      return print(body);
     } catch {
       return print({ status: "server-down", id: args.id, next: "The dashboard is not running. Start it with `node scripts/dashboard.mjs start`, then run this wait again. If start fails, ask in chat with AskQuestion and record the answer." });
     }
@@ -168,12 +189,37 @@ async function wait(out) {
     const ask = readMerged(out)?.asks.find((item) => item.id === args.id);
     if (!ask) return print({ status: "missing", id: args.id });
     if (ask.status === "answered") {
-      noteDelivered(out, args.id, ask.answerLabel, ask.via);
-      return print({ status: "answered", id: args.id, value: ask.answer, label: ask.answerLabel, via: ask.via }, out);
+      return print(delivered(out, args.id, {
+        status: "answered",
+        id: args.id,
+        value: ask.answer,
+        label: ask.answerLabel,
+        via: ask.via,
+        ...(ask.answerText ? { text: ask.answerText } : {}),
+        ...(ask.answerImages?.length ? { images: ask.answerImages } : {})
+      }), out);
     }
     if (Date.now() > end) return print({ status: "pending", id: args.id, next: "Not answered yet. Run the same wait command again right now. Do not write to the user." });
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
+}
+
+function delivered(out, id, body) {
+  noteDelivered(out, id, body.label, body.via);
+  const noted = noteFeedback(out, id);
+  const ask = readSession(out)?.asks.find((item) => item.id === id);
+  const option = ask?.options.find((item) => item.id === body.value);
+  if (ask?.attach && option && !option.repeat) {
+    for (const note of (readSession(out).notes || []).filter((item) => /^fb\d/.test(item.id) && (item.status === "open" || item.fixedBy === "agent"))) {
+      setNoteStatus(out, note.id, "fixed", "developer");
+    }
+  }
+  return {
+    ...body,
+    ...(body.images ? { images: body.images.map((file) => path.isAbsolute(file) ? file : path.join(out, file)) } : {}),
+    ...(noted ? { note: noted } : {}),
+    ...(option?.then ? { next: option.then } : {})
+  };
 }
 
 function ensureAsk(out) {
@@ -183,12 +229,18 @@ function ensureAsk(out) {
 }
 
 function definitionFor(out, id) {
+  if (typeof args.definition === "string") {
+    const built = JSON.parse(fs.readFileSync(path.resolve(args.definition), "utf8"));
+    if (built.id !== id) throw new Error(`That file defines ${built.id}, not ${id}.`);
+    return built;
+  }
   if (args.prompt) {
-    if (args.option.length < 2) throw new Error("A custom question needs at least two --option values.");
+    if (args.option.length < 2 && args.input !== "text") throw new Error("A custom question needs at least two --option values.");
     return {
       id,
       title: args.title || id,
       prompt: args.prompt,
+      input: args.input || "",
       options: args.option.map((raw) => {
         const [optionId, label, ...detail] = raw.split(":");
         return { id: optionId, label: label || optionId, detail: detail.join(":") };

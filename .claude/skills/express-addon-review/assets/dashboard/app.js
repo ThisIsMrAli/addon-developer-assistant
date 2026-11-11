@@ -12,7 +12,7 @@ const token = document.body.dataset.token;
 const root = document.getElementById("app");
 const NS = "http://www.w3.org/2000/svg";
 
-const ui = { tab: "", tabPinned: false, filter: "all", shotTheme: "all", pickedShot: null, choice: {}, secret: {}, error: {}, sending: {}, conn: "live", skew: 0, copied: "", theme: "auto" };
+const ui = { tab: "", tabPinned: false, filter: "all", shotTheme: "all", pickedShot: null, choice: {}, secret: {}, error: {}, sending: {}, attach: {}, addFiles: null, conn: "live", skew: 0, copied: "", theme: "auto" };
 const fromHash = location.hash.slice(1);
 if (["findings", "panel", "listing", "activity"].includes(fromHash)) { ui.tab = fromHash; ui.tabPinned = true; }
 try { ui.theme = localStorage.getItem("review-theme") || "auto"; } catch { /* storage off */ }
@@ -472,6 +472,16 @@ function paintHero() {
         agentLine(agent)
       ];
     }
+    if (s.kind === "develop" && agent?.tone === "work") {
+      const doing = feed[0]?.text || current?.hint || "Working on the add-on";
+      return [
+        h("div", { class: "hero-top" }, h("div", { class: "hero-step" }, h("span", { class: "spin" }), h("p", { class: "eyebrow", text: eyebrow })), timer(feed[0]?.at, "Updated")),
+        h("h2", { id: "hero-title", text: doing }),
+        h("p", { class: "lede", text: "Still going. The next card shows up when there is a decision." }),
+        feedList(feed),
+        agentLine(agent)
+      ];
+    }
     return [
       h("div", { class: "hero-top" }, h("p", { class: "eyebrow", text: current ? `Up next · ${label}` : "Review" })),
       h("h2", { id: "hero-title", text: current ? current.label : "Working" }),
@@ -542,7 +552,12 @@ function paintSheet() {
   }
 }
 
+const DASHBOARD_CARD_HINT = "The agent carries on the moment you confirm.";
+
 function turn(ask) {
+  ui.addFiles = null;
+  if (ask.input === "text") return textTurn(ask);
+  if (ask.attach) return feedbackTurn(ask);
   const k = `${ask.id}:${ask.nonce}`;
   const status = h("span", { class: "error", role: "alert" });
   const submit = h("button", { class: "btn primary", type: "submit", disabled: true, text: "Confirm choice" });
@@ -565,7 +580,7 @@ function turn(ask) {
     if (option?.secret) secretBox.querySelector("label").textContent = option.secret;
     const missingSecret = Boolean(option?.secret) && !String(ui.secret[k] || "").trim();
     submit.disabled = !option || missingSecret || Boolean(ui.sending[k]);
-    submit.textContent = ui.sending[k] ? "Sending" : "Confirm choice";
+    submit.textContent = ui.sending[k] ? "Sending" : ask.id === "plan" && ui.choice[k] === "build" ? "Build this" : "Confirm choice";
     status.textContent = ui.error[k] || "";
   }
 
@@ -585,13 +600,13 @@ function turn(ask) {
     sync();
     await load();
   } }, list, secretBox,
-  h("div", { class: "actions" }, submit, h("span", { class: "hint", text: "The agent carries on the moment you confirm." })), status);
+  h("div", { class: "actions" }, submit, h("span", { class: "hint", text: DASHBOARD_CARD_HINT })), status);
 
   const s = session();
   const shots = (ask.images || []).map((id) => s.shots.find((shot) => shot.id === id)).filter(Boolean);
   const sheet = h("section", { class: "turn", "aria-labelledby": `turn-title-${k}` },
-    h("header", null, h("span", { class: "badge" }, icon("hand", 2.6), "Your turn"), h("h2", { id: `turn-title-${k}`, text: ask.title || ask.id })),
-    h("p", { class: "prompt", text: ask.prompt }),
+    h("header", null, h("span", { class: "badge" }, icon("hand", 2.6), ask.kicker || "Your turn"), h("h2", { id: `turn-title-${k}`, text: ask.title || ask.id })),
+    promptBlock(ask),
     shots.length ? h("div", { class: "proofs" }, shots.map((shot) => h("figure", null, h("img", { src: fileUrl(shot.file), alt: shot.label, width: shot.width, height: shot.height }), h("figcaption", { text: `${shot.label}, ${shot.width} by ${shot.height}` })))) : null,
     ask.id === "listing-review" && s.listing ? listingBlock(s.listing) : null,
     form,
@@ -599,6 +614,169 @@ function turn(ask) {
       h("ul", null, ask.affects.map((item) => h("li", null, badge(item.severity), h("code", { text: `${item.file}${item.line ? `:${item.line}` : ""}` }), plainToken(item.id) ? ` ${plainToken(item.id)}` : "")))) : null);
   sync();
   return sheet;
+}
+
+const MAX_SHOTS = 6;
+const MAX_EDGE = 1800;
+const MAX_SHOT_BYTES = 4.5 * 1024 * 1024;
+
+const readDataUrl = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result));
+  reader.onerror = () => reject(new Error("That file could not be read."));
+  reader.readAsDataURL(blob);
+});
+
+async function prepareShot(file) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const plain = scale === 1 && file.size <= MAX_SHOT_BYTES && /^image\/(png|jpeg|webp)$/.test(file.type);
+  const name = file.name || "screenshot";
+  if (plain) return { name, dataUrl: await readDataUrl(file), width: bitmap.width, height: bitmap.height };
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
+  if (!blob || blob.size > MAX_SHOT_BYTES) throw new Error("That screenshot is too large. Crop it or use a smaller one.");
+  return { name: name.replace(/\.[a-z]+$/i, "") + ".jpg", dataUrl: await readDataUrl(blob), width: canvas.width, height: canvas.height };
+}
+
+function feedbackTurn(ask) {
+  const k = `${ask.id}:${ask.nonce}`;
+  const draft = ui.attach[k] || (ui.attach[k] = { text: "", images: [] });
+  const status = h("span", { class: "error", role: "alert" });
+  const submit = h("button", { class: "btn primary", type: "submit" });
+  const list = h("ul", { class: "attached", "aria-label": "Screenshots that will be sent" });
+  const text = h("textarea", {
+    id: `report-${k}`, rows: "5", maxlength: String(ask.maxLength || 4000), spellcheck: "true",
+    placeholder: "What did you see, and what did you expect?",
+    oninput: (event) => { draft.text = event.target.value; sync(); }
+  });
+  text.value = draft.text;
+  const chooser = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", multiple: true, class: "sr", tabindex: "-1", "aria-label": "Choose screenshots" });
+  const drop = h("div", { class: "drop" },
+    h("button", { class: "btn small", type: "button", onclick: () => chooser.click(), text: "Add screenshots" }),
+    h("span", { class: "hint", text: "or drop images here, or paste one. Up to 6." }));
+  const report = h("div", { class: "report", hidden: true },
+    h("label", { for: `report-${k}`, text: "What is wrong" }), text, drop, chooser, list);
+
+  async function addFiles(files) {
+    const images = [...files].filter((file) => /^image\//.test(file.type));
+    if (!images.length) { ui.error[k] = "Only images can be added."; sync(); return; }
+    for (const file of images) {
+      if (draft.images.length >= MAX_SHOTS) { ui.error[k] = `At most ${MAX_SHOTS} screenshots.`; break; }
+      try {
+        draft.images.push(await prepareShot(file));
+        ui.error[k] = "";
+      } catch (error) {
+        ui.error[k] = error.message;
+      }
+    }
+    paintList();
+    sync();
+  }
+  ui.addFiles = addFiles;
+  chooser.addEventListener("change", () => { addFiles(chooser.files); chooser.value = ""; });
+  drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.dataset.over = "true"; });
+  drop.addEventListener("dragleave", () => { delete drop.dataset.over; });
+  drop.addEventListener("drop", (event) => { event.preventDefault(); delete drop.dataset.over; addFiles(event.dataTransfer?.files || []); });
+
+  function paintList() {
+    fill(list, draft.images.map((image, index) => h("li", null,
+      h("img", { src: image.dataUrl, alt: `Screenshot ${index + 1}: ${image.name}`, width: "96" }),
+      h("span", { class: "meta", text: `${image.name}, ${image.width} by ${image.height}` }),
+      h("button", { class: "btn small", type: "button", "aria-label": `Remove screenshot ${index + 1}`, onclick: () => { draft.images.splice(index, 1); paintList(); sync(); }, text: "Remove" }))));
+  }
+
+  const choose = (id) => { ui.choice[k] = id; sync(); };
+  const choices = h("fieldset", { class: "choices" }, h("legend", { class: "sr", text: "Choose one option" }),
+    ask.options.map((option) => h("label", { class: "choice" },
+      h("input", { type: "radio", name: `choice-${k}`, value: option.id, checked: ui.choice[k] === option.id, onchange: () => choose(option.id) }),
+      h("span", null,
+        h("span", { class: "label", text: clean(option.label) }),
+        option.detail ? h("span", { class: "what", text: option.detail }) : null))));
+
+  function sync() {
+    const option = ask.options.find((item) => item.id === ui.choice[k]);
+    report.hidden = !option?.repeat;
+    const empty = !draft.text.trim() && !draft.images.length;
+    submit.disabled = !option || (option.repeat && empty) || Boolean(ui.sending[k]);
+    submit.textContent = ui.sending[k] ? "Sending" : option?.repeat ? "Send to the assistant" : "Confirm: no more bugs";
+    status.textContent = ui.error[k] || "";
+  }
+
+  const form = h("form", { onsubmit: async (event) => {
+    event.preventDefault();
+    ui.sending[k] = true;
+    ui.error[k] = "";
+    sync();
+    try {
+      const body = { id: ask.id, value: ui.choice[k], text: draft.text.trim(), images: draft.images.map((image) => ({ name: image.name, data: image.dataUrl })) };
+      const res = await fetch(api("/api/answer"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) ui.error[k] = (await res.json().catch(() => ({}))).error || "That did not go through.";
+      else delete ui.attach[k];
+    } catch {
+      ui.error[k] = "The agent's dashboard stopped answering. Reply in chat instead.";
+    }
+    ui.sending[k] = false;
+    sync();
+    await load();
+  } }, choices, report, h("div", { class: "actions" }, submit, h("span", { class: "hint", text: DASHBOARD_CARD_HINT })), status);
+
+  paintList();
+  sync();
+  return h("section", { class: "turn", "aria-labelledby": `turn-title-${k}` },
+    h("header", null, h("span", { class: "badge" }, icon("hand", 2.6), "Your turn"), h("h2", { id: `turn-title-${k}`, text: ask.title || ask.id })),
+    h("p", { class: "prompt", text: ask.prompt }),
+    form);
+}
+
+document.addEventListener("paste", (event) => {
+  const files = [...(event.clipboardData?.files || [])].filter((file) => /^image\//.test(file.type));
+  if (!files.length || !ui.addFiles) return;
+  event.preventDefault();
+  ui.addFiles(files);
+});
+
+function promptBlock(ask) {
+  if (ask.id !== "plan") return h("p", { class: "prompt", text: ask.prompt });
+  const lines = String(ask.prompt || "").split("\n").filter(Boolean);
+  const [lead, ...rest] = lines;
+  return h("div", null,
+    h("p", { class: "prompt", text: lead || ask.prompt }),
+    rest.length ? h("ul", { class: "spec" }, rest.map((line) => h("li", { text: line }))) : null);
+}
+
+function textTurn(ask) {
+  const k = `${ask.id}:${ask.nonce}`;
+  const status = h("span", { class: "error", role: "alert" });
+  const input = h("input", { type: "text", id: `text-${k}`, maxlength: String(ask.maxLength || 500), autocomplete: "off", spellcheck: "false", placeholder: ask.placeholder || "Type your answer" });
+  const submit = h("button", { class: "btn primary", type: "submit", text: "Confirm" });
+  const form = h("form", { class: "text-answer", onsubmit: async (event) => {
+    event.preventDefault();
+    const value = input.value.trim();
+    if (!value) {
+      status.textContent = "Enter the text for this question.";
+      return;
+    }
+    submit.disabled = true;
+    try {
+      const res = await fetch(api("/api/answer"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: ask.id, value }) });
+      if (!res.ok) status.textContent = (await res.json().catch(() => ({}))).error || "That did not go through.";
+    } catch {
+      status.textContent = "The dashboard stopped answering. Reply in chat instead.";
+    }
+    submit.disabled = false;
+    await load();
+  } }, h("label", { for: `text-${k}`, text: "Your answer" }), input, h("div", { class: "actions" }, submit), status);
+  return h("section", { class: "turn", "aria-labelledby": `turn-title-${k}` },
+    h("header", null, h("span", { class: "badge" }, icon("hand", 2.6), ask.kicker || "Your turn"), h("h2", { id: `turn-title-${k}`, text: ask.title || ask.id })),
+    h("p", { class: "prompt", text: ask.prompt }),
+    form);
 }
 
 function chatTurn(ask) {
@@ -610,7 +788,7 @@ function settled(ask) {
   const delivered = Boolean(ask.deliveredAt) || ask.via === "chat";
   return h("div", { class: "settled", role: "status", "data-state": delivered ? "ok" : "sending" },
     delivered ? icon("check", 3) : h("span", { class: "spin" }),
-    h("strong", { text: `You chose: ${clean(ask.answerLabel)}` }),
+    h("strong", { text: `You chose: ${clean(ask.answerLabel)}${ask.answerImages?.length ? `, with ${ask.answerImages.length} screenshot${ask.answerImages.length === 1 ? "" : "s"}` : ""}` }),
     h("span", { text: `${ask.title || ask.id}. ${ask.via === "chat" ? "Answered in chat." : delivered ? "The agent has it and is carrying on." : "Sent. Waiting for the agent to pick it up."}` }));
 }
 

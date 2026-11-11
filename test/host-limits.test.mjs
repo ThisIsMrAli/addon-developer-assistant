@@ -9,7 +9,7 @@ import { prepareExpressRun } from "../.claude/skills/express-addon-develop/scrip
 import { devRequestOptions, policyFailure, probeDevPort, readLoopbackPolicy } from "../.claude/skills/express-addon-develop/scripts/lib/loopback.mjs";
 
 function session(develop) {
-  const done = new Set(["docs", "origin", "template", "feasibility", "design", "implement", "build", "package", "audit"]);
+  const done = new Set(["planning", "plan", "docs", "design", "template", "implement", "build", "package", "audit", "try"]);
   return {
     kind: "develop",
     mode: "chat",

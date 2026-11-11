@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { checkJsSyntax, controlFlow, environmentSniffProblems, iframeImageCalls, imageKeepsContentActive, projectPanels, scanHtml, scanJs, storageKinds, stripComments, sandboxEngineProblems } from "./code-scan.mjs";
+import { spectrumHandoff, spectrumProblems } from "./spectrum.mjs";
 import { placementProblems, sandboxEntry, simulateSandbox } from "./sandbox-sim.mjs";
 import { sandboxApiMismatches } from "./standin.mjs";
 import { buildProject } from "./package-addon.mjs";
@@ -18,11 +19,12 @@ const PLACEHOLDER_NAMES = new Set([
   "template", "add-on name", "your add-on name"
 ]);
 
-const ANSWERED = new Set(["origin", "feasibility", "design", "implement"]);
+const ANSWERED = new Set(["plan", "design"]);
 
 /**
- * Refuse every write until origin, feasibility, design, and implement=write are answered.
+ * Refuse every write until the spec is confirmed (plan=build) and design is answered.
  * A new folder also needs a template id that was fetched this session.
+ * Document editing is included by default. The developer is not asked iframe vs sandbox.
  */
 export function gate(session) {
   const asks = session.asks || [];
@@ -31,14 +33,15 @@ export function gate(session) {
   if (missing.length) {
     return { ok: false, error: `Refusing to write. Still unanswered: ${missing.join(", ")}.` };
   }
-  if (answer("implement").answer !== "write") {
-    return { ok: false, error: "Refusing to write. The implement answer was not write." };
+  if (answer("plan").answer !== "build") {
+    return { ok: false, error: "Refusing to write. The spec was not confirmed with Build it." };
   }
-  const feature = answer("feasibility").answer;
-  if (!["iframe", "sandbox", "unsupported"].includes(feature)) {
-    return { ok: false, error: "Refusing to write. Feasibility has no class." };
+  const feature = session.feasibility?.class || "sandbox";
+  if (feature === "unsupported") {
+    return { ok: false, error: "Refusing to write. The fetched pages do not support this feature." };
   }
-  if (answer("origin").answer === "new") {
+  const origin = session.develop?.folder === "existing" || answer("origin")?.answer === "existing" ? "existing" : "new";
+  if (origin === "new") {
     const template = answer("template");
     const allowed = session.templates?.ids || [];
     if (!template) return { ok: false, error: "Refusing to write. No template was chosen." };
@@ -46,7 +49,7 @@ export function gate(session) {
       return { ok: false, error: `Refusing to write. ${template.answer} was not in the fetched template list.` };
     }
   }
-  return { ok: true, feature, design: answer("design").answer, origin: answer("origin").answer, template: answer("template")?.answer || "" };
+  return { ok: true, feature, design: answer("design").answer, origin, template: answer("template")?.answer || "" };
 }
 
 export function scaffoldProject({ dir, template }) {
@@ -441,7 +444,7 @@ if (typeof runtime !== "undefined") runtime.exposeApi({ addHeading, addImage });
 `;
 
 /** The pages and calls the agent must use. Nothing here is written into the project. */
-export function implementationHandoff({ brief, pages = [], design = "" }) {
+export function implementationHandoff({ brief, pages = [], design = "", catalog = null }) {
   const needs = briefNeeds(brief);
   const apis = [];
   if (needs.includes("text")) {
@@ -459,12 +462,8 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
       note: "Build the image in the document sandbox. Adobe's Editor reference (keepContentActiveDuringAsync, Example 2, load an image from a Blob) awaits editor.loadBitmapImage(blob), then calls editor.keepContentActiveDuringAsync(insertionParent, async () => {}, afterAsyncCallback). createImageContainer runs in that afterAsyncCallback, not in the open after the await and not inside the async lambda. editor.queueAsyncEdit() was removed from the SDK (Adobe changelog 2026-08-03) and is not accepted. The document sandbox runs on QuickJS without the ES2022+ built-ins, and it may also lack String.prototype.replaceAll: no Array.prototype.at, findLast, toSorted, toReversed, with, Object.hasOwn, Object.groupBy, replaceAll, structuredClone or timers. record removes them before it runs the code, and flags each use. Give createImageContainer an initialSize with the bitmap's own aspect ratio (bitmap.width and bitmap.height scaled by one factor). Express throws \"Aspect ratio of initialSize must match aspect ratio of bitmapData to within 1%\" otherwise, and the stand-in used by record and the audit throws the same. Fit the image with resize() and place it below the heading column, using boundsInParent, so it does not cover a heading (position-elements.md, resize-elements.md). A later heading continues the same centre line and the image moves down to make room. A centered addImage() covers the heading under it. A panel call such as this._sandboxProxy.addImage(blob) is a sandbox call, not addOnUISdk.app.document.addImage.",
     });
   }
-  if (needs.includes("panel") || (design === "swc" && !needs.includes("oauth"))) {
-    apis.push({
-      api: "sp-theme, sp-textfield, sp-button",
-      runtime: "iframe panel",
-      note: "Build the form with Spectrum Web Components. Do not leave a plain input labelled Note."
-    });
+  if (design === "swc" || (needs.includes("panel") && design !== "leave")) {
+    apis.push(spectrumHandoff(catalog));
   }
   if (needs.includes("oauth") || needs.includes("storage")) {
     apis.push({
@@ -495,7 +494,8 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
     design,
     pages,
     apis,
-    note: "The agent writes this feature. A stub is not an implementation."
+    spectrum: catalog?.components?.length ? { version: catalog.version || "", count: catalog.components.length, file: catalog.markdown || catalog.file || "", components: catalog.components } : null,
+    note: "The agent writes this feature from the fetched Spectrum catalog when the design is Spectrum. A stub is not an implementation."
   };
 }
 
@@ -503,7 +503,7 @@ export function implementationHandoff({ brief, pages = [], design = "" }) {
  * The feature is real only when parsed code calls the APIs the brief needs, the project builds,
  * and a canned stub is absent. Comments do not count. A failure is a list of problems.
  */
-export function verifyFeature({ dir, brief, build = true }) {
+export function verifyFeature({ dir, brief, design = "", catalogTags = null, build = true }) {
   const needs = briefNeeds(brief);
   const { manifest } = readManifest(dir);
   const files = sourceFiles(dir);
@@ -563,10 +563,10 @@ export function verifyFeature({ dir, brief, build = true }) {
       if (iframeImages.length && needs.includes("text")) problems.push(`${iframeImages[0].call}() is the iframe document API. Express centres that image on the page, so it covers the headings. Build the image in the document sandbox (loadBitmapImage, createImageContainer) and place it below the headings with boundsInParent.`);
     }
   }
-  if (needs.includes("panel")) {
-    if (!panels.spectrum) {
-      problems.push("A Spectrum form needs a Spectrum Web Component such as sp-textfield or sp-button in the markup, not in a comment.");
-    }
+  const markup = files.map((file) => file.text).join("\n");
+  if (design === "swc") problems.push(...spectrumProblems(markup, catalogTags));
+  else if (needs.includes("panel") && !panels.spectrum) {
+    problems.push("A Spectrum form needs a Spectrum Web Component such as sp-textfield or sp-button in the markup, not in a comment.");
   }
   const permissions = manifestPermissions(manifest);
   if (needs.includes("oauth")) {
@@ -821,6 +821,7 @@ export function manifestPermissions(manifest) {
 
 function distinctiveWord(brief) {
   const words = String(brief || "").toLowerCase().match(/\b[a-z][a-z0-9-]{3,}\b/g) || [];
-  const skip = new Set(["add", "the", "and", "with", "from", "that", "this", "into", "your", "panel", "field", "feature", "using", "make", "insert"]);
-  return words.find((word) => !skip.has(word)) || "";
+  const skip = new Set(["add", "the", "and", "with", "from", "that", "this", "into", "your", "panel", "field", "feature", "using", "make", "insert", "want", "need", "like", "just", "also", "have", "will", "they", "them", "when", "then", "some", "more", "only", "very", "really", "please", "should", "would", "could", "high", "good", "best", "nice", "simple", "easy", "fast", "new", "current", "page", "document", "addon", "express", "adobe", "quality", "user", "users"]);
+  const content = words.filter((word) => !skip.has(word));
+  return content.sort((a, b) => b.length - a.length)[0] || "";
 }

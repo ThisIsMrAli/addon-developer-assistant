@@ -29,7 +29,7 @@ Run it again after every fix. It matches bugs across runs: one that is gone is m
 | Rule | What it means | Handling |
 | --- | --- | --- |
 | `dialog-close-misplaced` | The close control is in the lower half of the dialog. People look top right. | Fix now |
-| `dialog-no-exit` | A dialog has no visible Close, Cancel, or Back. | Fix now. Only a warning when Escape closes it. |
+| `dialog-no-exit` | A dialog has no visible Close, Cancel, or Back. An open `sp-picker` or `sp-menu` is a menu, including when Spectrum shows it as an overlay at 320px. It is not this bug. | Fix now. Only a warning when Escape closes it. |
 | `dialog-overflows` | The dialog does not fit the panel and does not scroll. | Fix now. A warning when it does scroll. |
 | `control-covered` | A control is under another element, so a click lands on the wrong thing. | Fix now |
 | `invisible-cover` | Something at opacity 0 sits over the panel and takes the clicks meant for its controls. Often a dialog or scrim whose animation ends invisible when reduced motion is on. | Fix now |

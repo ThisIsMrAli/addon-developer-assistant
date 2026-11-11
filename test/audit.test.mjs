@@ -57,6 +57,7 @@ const EXPECTED = {
   "invisible-dialog.html": ["invisible-cover"],
   "layer-ok.html": [],
   "overlays-ok.html": [],
+  "picker-menu.html": [],
   "shadow-close.html": ["dialog-close-misplaced"],
   "sideways.html": ["scrolls-sideways"],
   "small-and-faint.html": ["click-without-keyboard", "low-contrast", "small-target", "small-type", "text-clipped"]

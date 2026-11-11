@@ -47,14 +47,8 @@ test("an existing add-on is not edited before the gate, then gains a caption and
   assert.notEqual(still.status, 0);
   assert.equal(fs.readFileSync(htmlPath, "utf8"), before);
 
-  answer(env, out, "origin", "existing");
-  answer(env, out, "feasibility", "iframe");
+  answer(env, out, "plan", "build");
   answer(env, out, "design", "leave");
-  const refused = run(developCli, ["implement", "--out", out], env);
-  assert.notEqual(refused.status, 0, "implement=write is still unanswered");
-  assert.equal(fs.readFileSync(htmlPath, "utf8"), before);
-
-  answer(env, out, "implement", "write");
   const wrote = run(developCli, ["implement", "--out", out], env);
   assert.equal(wrote.status, 0, wrote.stdout + wrote.stderr);
   assert.equal(wrote.json.awaitingAgent, true);

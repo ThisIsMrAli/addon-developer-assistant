@@ -2,33 +2,41 @@
 /**
  * Express Add-on Develop Assistant.
  *
- *   begin --dir <folder> --name <name> --brief "<feature>" [--out dir]
+ *   begin --dir <folder> --goal "<request, word for word>" [--name <name>] [--brief "<feature>"] [--out dir]
+ *   refresh-plan
+ *   apply-tweak
  *   docs [--budget 20000] [--page-timeout 8000]
  *   templates
  *   classify
  *   implement
+ *   record
  *   build
  *   package
  *   audit
+ *   feedback [--changed "..."] [--skip]
  *   listing-text
  *
- * `begin` does not use the network. Mode is asked before docs.
+ * `begin` does not use the network. Mode, then planning, then the confirm card, before docs.
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { reminder } from "../../express-addon-review/scripts/lib/next.mjs";
-import { addShot, appendAnswerLine, publishAsk, readMerged, setListing } from "../../express-addon-review/scripts/lib/session.mjs";
-import { originAsk } from "./lib/flow.mjs";
+import { addShot, mutate, publishAsk, readMerged, setListing } from "../../express-addon-review/scripts/lib/session.mjs";
+import { resolveDevelopPlan } from "./lib/flow.mjs";
+import { prepareFeedback } from "./lib/feedback.mjs";
 import { fetchDevDocs, pagesForBrief } from "./lib/docs-live.mjs";
+import { fetchSpectrumCatalog, readSpectrumCatalog, writeSpectrumCatalog } from "./lib/spectrum-catalog.mjs";
 import { classifyFeature, pagesFromDisk } from "./lib/feasibility.mjs";
 import { applyManifestName, gate, implementationHandoff, scaffoldProject, scrubTemplateChrome, verifyFeature } from "./lib/implement.mjs";
+import { deriveName, isBlankGoal } from "./lib/intent.mjs";
 import { fillListingDir, listingFrom } from "./lib/listing-copy.mjs";
+import { applyPlanning, parseTweak, planAsk } from "./lib/planning.mjs";
 import { setAddonVersion } from "./lib/version.mjs";
 import { buildProject, packageProject } from "./lib/package-addon.mjs";
 import { homeDir, liveDir, rememberedOut, rememberOut, reviewScripts } from "./lib/paths.mjs";
-import { patchDevelop, saveDocs, saveFeasibility, saveTemplates, setStep, startDevelopSession } from "./lib/session-start.mjs";
+import { patchDevelop, refreshPlanCard, saveDocs, saveFeasibility, saveTemplates, setStep, startDevelopSession } from "./lib/session-start.mjs";
 import { builtDir, serveWithStandIn } from "./lib/standin.mjs";
 import { fetchTemplates } from "./lib/templates.mjs";
 
@@ -38,6 +46,8 @@ const args = parseArgs(rest);
 
 try {
   if (command === "begin") begin();
+  else if (command === "refresh-plan") refreshPlan();
+  else if (command === "apply-tweak") applyTweak();
   else if (command === "docs") await docs();
   else if (command === "templates") await templates();
   else if (command === "classify") classify();
@@ -46,6 +56,7 @@ try {
   else if (command === "build") build();
   else if (command === "package") pack();
   else if (command === "audit") await audit();
+  else if (command === "feedback") feedback();
   else if (command === "listing-text") listingText();
   else if (command === "listing-shots") listingShots();
   else if (command === "version") version();
@@ -72,12 +83,16 @@ try {
 function begin() {
   if (!args.dir) throw new Error("Use --dir for the empty folder or the existing add-on.");
   const dir = path.resolve(args.dir);
-  const out = path.resolve(args.out || path.join(homeDir(), slugFrom(args.name || path.basename(dir))));
+  const goal = typeof args.goal === "string" ? args.goal.trim() : "";
+  const brief = typeof args.brief === "string" ? args.brief.trim() : "";
+  const job = goal || brief;
+  const named = typeof args.name === "string" ? args.name.trim() : "";
+  let out = path.resolve(args.out || path.join(homeDir(), slugFrom(named || deriveName(job) || path.basename(dir))));
   const facts = inspectFolder(dir);
   if (args.empty && !facts.empty) {
     throw new Error(`${dir} is not an empty folder. --empty was not applied, and nothing in the folder was deleted.`);
   }
-  if (!args.fresh && sameSession(out, dir)) {
+  if (!args.fresh && sameSession(out, dir) && !sessionIsFinished(out)) {
     rememberOut(out);
     print({
       ok: true,
@@ -88,36 +103,134 @@ function begin() {
     }, null);
     return;
   }
+  if (sameSession(out, dir) && sessionIsFinished(out)) {
+    const slug = slugFrom(named || deriveName(job) || path.basename(dir));
+    out = path.join(homeDir(), "sessions", `${slug}-${Date.now().toString(36)}`);
+  }
   if (!facts.empty && !facts.manifest) {
     throw new Error(`${dir} is not an empty folder and has no add-on manifest. Nothing was deleted. Start from an empty folder, or point --dir at an existing add-on.`);
   }
   if (args.fresh) fs.rmSync(path.join(out, "answers.jsonl"), { force: true });
   const existing = Boolean(facts.manifest) && !args.empty;
   const currentName = existing ? readManifestName(dir) : "";
-  const nameIgnored = existing && args.name && currentName && args.name !== currentName ? args.name : "";
-  startDevelopSession(out, { name: currentName || args.name || path.basename(dir), dir, brief: args.brief || "" });
+  const nameIgnored = existing && named && currentName && named !== currentName ? named : "";
+  const displayName = currentName || named || (isBlankGoal(job) ? path.basename(dir) : deriveName(job));
+  startDevelopSession(out, { name: displayName, dir, brief: job, goal: job });
   patchDevelop(out, { empty: Boolean(args.empty) || facts.empty, folder: existing ? "existing" : "empty", ...(nameIgnored ? { nameIgnored } : {}) });
-  if (existing) {
-    const published = publishAsk(out, originAsk());
-    appendAnswerLine(out, { type: "answer", askId: "origin", nonce: published.ask.nonce, value: "existing", via: "detected", at: new Date().toISOString() });
-    setStep(out, "origin", "done", "This folder already has an add-on");
-    setStep(out, "template", "skipped", "An existing add-on does not get a template");
-  }
+  if (existing) setStep(out, "template", "skipped", "An existing add-on does not get a template");
+  const plan = resolveDevelopPlan(readMerged(out));
   print({
     ok: true,
     out,
     network: false,
     empty: Boolean(args.empty) || facts.empty,
     existing,
+    plan: { name: plan.name, goal: plan.goal || "(ask)" },
     ...(nameIgnored ? { nameIgnored, note: `--name ${nameIgnored} was not applied. The manifest already says ${currentName}.` } : {}),
-    next: "Ask the mode question in questions.json with AskQuestion, then `node scripts/session.mjs mode --set dashboard` or `node scripts/session.mjs mode --set chat`. Do not fetch the docs before that. Do not end your turn."
+    next: "Ask the mode question in questions.json with AskQuestion, then `node scripts/session.mjs mode --set dashboard` or `node scripts/session.mjs mode --set chat`. Do not fetch the docs before mode, planning, and the confirm card. Do not end your turn."
   }, null);
+}
+
+function refreshPlan() {
+  const out = resolveOut();
+  const plan = refreshPlanCard(out);
+  print({
+    ok: true,
+    plan,
+    card: planAsk(plan).prompt,
+    next: "Ask `plan` next: `node scripts/session.mjs ask --id plan`. Do not end your turn."
+  }, out);
+}
+
+function applyTweak() {
+  const out = resolveOut();
+  const session = readMerged(out);
+  const tweak = session.asks.find((item) => item.id === "tweak" && item.status === "answered");
+  if (!tweak) throw new Error("No tweak answer yet.");
+  const plan = resolveDevelopPlan(session);
+  const changes = parseTweak(tweak.answer, plan);
+  const next = applyPlanning({ ...plan, ...changes }, {});
+  if (changes.goal) next.goal = changes.goal;
+  if (changes.name) next.name = changes.name;
+  if (changes.design) next.designHint = changes.design;
+  if (changes.origin) next.origin = changes.origin;
+  patchDevelop(out, {
+    tweakApplied: tweak.answer,
+    brief: next.goal,
+    name: next.name,
+    description: next.description || "",
+    features: next.features || {},
+    designHint: next.designHint || "",
+    ...(changes.origin === "existing" || changes.origin === "new" ? { folder: changes.origin === "existing" ? "existing" : "empty" } : {})
+  });
+  mutate(out, (draft) => {
+    draft.asks = draft.asks.filter((item) => item.id !== "plan" && item.id !== "tweak");
+    draft.brief = next.goal;
+    draft.addon.name = next.name;
+    draft.develop = { ...(draft.develop || {}), planCardFresh: false, tweakApplied: tweak.answer };
+    if (draft.steps.find((step) => step.id === "plan")) {
+      const step = draft.steps.find((item) => item.id === "plan");
+      step.status = "pending";
+      step.detail = "";
+      step.endedAt = null;
+    }
+  });
+  refreshPlanCard(out);
+  print({ ok: true, plan: next, next: "Ask `plan` again with the updated spec. Do not end your turn." }, out);
+}
+
+function feedback() {
+  const out = resolveOut();
+  const prepared = prepareFeedback(out, { changed: typeof args.changed === "string" ? args.changed : "", skip: Boolean(args.skip) });
+  if (prepared.skipped) {
+    print({ ok: true, ...prepared, next: "Run `node scripts/session.mjs next` and do what it says." }, out);
+    return;
+  }
+  if (!prepared.ok) {
+    print({ ok: false, error: prepared.error, next: prepared.next }, out);
+    process.exitCode = 1;
+    return;
+  }
+  if (prepared.already || prepared.answered) {
+    print({ ok: true, ...prepared }, out);
+    return;
+  }
+  const asked = publishAsk(out, prepared.definition);
+  void asked;
+  const session = readMerged(out);
+  const channel = session.mode === "dashboard" ? "dashboard" : "chat";
+  if (channel === "dashboard") {
+    print({
+      ok: true,
+      id: "feedback",
+      round: prepared.round,
+      channel,
+      next: "The try card is on the dashboard. Do NOT write to the user. Run `node scripts/session.mjs wait --id feedback` now."
+    }, out);
+    return;
+  }
+  print({
+    ok: true,
+    id: "feedback",
+    round: prepared.round,
+    channel,
+    next: "Ask the feedback question with AskQuestion (include the prompt and options). For bugs, pass --text and optional --image when recording: `node scripts/session.mjs answer --id feedback --value bugs --text \"...\"`. For no more bugs: `--value good`."
+  }, out);
 }
 
 function sameSession(out, dir) {
   try {
     const session = JSON.parse(fs.readFileSync(path.join(out, "session.json"), "utf8"));
     return session.kind === "develop" && path.resolve(session.addon?.path || "") === dir;
+  } catch {
+    return false;
+  }
+}
+
+function sessionIsFinished(out) {
+  try {
+    const session = JSON.parse(fs.readFileSync(path.join(out, "session.json"), "utf8"));
+    return session.steps?.find((step) => step.id === "done")?.status === "done";
   } catch {
     return false;
   }
@@ -148,6 +261,20 @@ async function docs() {
     pages: pagesForBrief(session.brief)
   });
   saveDocs(out, result);
+  setStep(out, "docs", "running", "Fetching the Spectrum catalog", { doing: "Fetching the Spectrum component catalog" });
+  const spectrumDir = path.join(out, "docs", "spectrum");
+  const spectrum = await fetchSpectrumCatalog();
+  const written = spectrum.ok ? writeSpectrumCatalog(spectrumDir, spectrum) : null;
+  patchDevelop(out, {
+    spectrumCatalog: {
+      ok: spectrum.ok,
+      version: spectrum.version,
+      count: spectrum.components.length,
+      file: written?.markdown || "",
+      failed: spectrum.failed.length,
+      error: spectrum.error || ""
+    }
+  });
   if (writeCache) {
     const summaryPath = path.join(liveDir, "summary.json");
     let previous = {};
@@ -177,10 +304,12 @@ async function templates() {
   const session = readMerged(out);
   const tooling = path.join(out, "docs", "src/pages/guides/getting-started/local-development/dev-tooling.md");
   const pageText = fs.existsSync(tooling) ? fs.readFileSync(tooling, "utf8") : "";
+  const design = (session.asks || []).find((item) => item.id === "design" && item.status === "answered")?.answer || "";
+  setStep(out, "template", "running", "Fetching templates", { doing: "Fetching Adobe's template list" });
   const result = await fetchTemplates({ pageText });
   const stored = { ...result };
   delete stored.raw;
-  saveTemplates(out, stored);
+  saveTemplates(out, stored, design);
   fs.writeFileSync(path.join(out, "templates.json"), `${JSON.stringify(result, null, 2)}\n`);
   if (!result.ok) {
     patchDevelop(out, { templatesFailed: result.note || "The template list could not be fetched." });
@@ -200,6 +329,7 @@ async function templates() {
 function classify() {
   const out = resolveOut();
   const session = readMerged(out);
+  setStep(out, "implement", "running", "Reading the docs", { doing: "Checking this against Adobe's docs" });
   const pages = pagesFromDisk(out, session.docs);
   const feasibility = classifyFeature(session.brief, pages);
   saveFeasibility(out, feasibility);
@@ -209,6 +339,7 @@ function classify() {
 function implement() {
   const out = resolveOut();
   const session = readMerged(out);
+  setStep(out, "implement", "running", "Writing the add-on", { doing: "Writing the add-on" });
   const decision = gate(session);
   if (!decision.ok) throw new Error(decision.error);
   const dir = session.addon.path;
@@ -231,7 +362,13 @@ function implement() {
   const pages = (session.docs?.pages || [])
     .filter((page) => /architecture|document-api|implementation-guide|use-text|position-elements|resize-elements|use-images|oauth2|create-renditions/.test(page.id || ""))
     .map((page) => ({ id: page.id, label: page.label, url: page.url }));
-  const handoff = implementationHandoff({ brief: session.brief, pages, design: decision.design });
+  const catalog = readSpectrumCatalog(path.join(out, "docs", "spectrum", "catalog.json"));
+  const handoff = implementationHandoff({
+    brief: session.brief,
+    pages,
+    design: decision.design,
+    catalog: catalog ? { version: catalog.version, components: catalog.components, file: path.join(out, "docs", "spectrum", "catalog.json"), markdown: path.join(out, "docs", "spectrum", "catalog.md") } : null
+  });
   if (!session.develop?.implemented) patchDevelop(out, { handoff, implemented: false, addonPath: dir });
   else patchDevelop(out, { handoff, addonPath: dir });
   print({ ok: true, action: "awaiting-agent-implementation", ...handoff, dir }, out);
@@ -242,7 +379,9 @@ function record() {
   const session = readMerged(out);
   const dir = session.addon?.path;
   if (!dir) throw new Error("The session has no add-on folder.");
-  const result = verifyFeature({ dir, brief: session.brief });
+  const design = session.asks?.find((item) => item.id === "design" && item.status === "answered")?.answer || "";
+  const catalog = readSpectrumCatalog(path.join(out, "docs", "spectrum", "catalog.json"));
+  const result = verifyFeature({ dir, brief: session.brief, design, catalogTags: catalog?.tags || null });
   if (!result.ok) {
     patchDevelop(out, { implemented: false, verify: result });
     throw new Error(`The feature is not done. ${result.problems.join(" ")}`);
@@ -269,6 +408,7 @@ function pack() {
   const out = resolveOut();
   const session = readMerged(out);
   if (!session.develop?.built) throw new Error("Package is refused until the build has run.");
+  setStep(out, "package", "running", "Packaging", { doing: "Packaging the add-on" });
   const result = packageProject(session.addon.path);
   if (!result.ok) throw new Error(result.error || "Package failed.");
   patchDevelop(out, { packaged: true, zip: result.zip, packageVia: result.via });
@@ -281,6 +421,7 @@ async function audit() {
   const session = readMerged(out);
   const project = session.addon.path;
   if (!project) throw new Error("No add-on folder.");
+  setStep(out, "audit", "running", "Checking the panel", { doing: "Walking the panel" });
   if (process.env.SKIP_BROWSER_TESTS) {
     const record = browserRun({
       standIn: "express-sdk-stand-in",
@@ -595,7 +736,7 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const flags = new Set(["empty", "fresh"]);
+  const flags = new Set(["empty", "fresh", "skip"]);
   const parsed = {};
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];

@@ -22,22 +22,25 @@ Skill: `.claude/skills/express-addon-develop/`.
 
 A develop session (`kind: "develop"`) is a second step list on the same session file and the same dashboard. `next` branches on `kind` and does not change a review.
 
-Steps, in order:
+Steps, in order (aligned with UXP Assistant):
 
-1. `docs` — live-fetch Adobe Express add-on pages in parallel, per-page timeout and an overall budget. Each page is `fresh`, `stale` (cache used), or `failed`. Counts are on the session, so the dashboard shows them.
-2. `origin` — empty folder or an existing add-on.
-3. `template` — only for an empty folder. Names come from the current `@adobe/create-ccweb-add-on` package (constants and the templates directory) checked against the tooling page. No built-in list. If the fetch fails, the list is empty and scaffolding is refused.
-4. `feasibility` — one decision per feature: iframe UI, document sandbox APIs, or unsupported. The choice cites a sentence that is actually in the fetched (or cached) page.
-5. `design` — Spectrum Web Components when the implementation guide still says to prefer them.
-6. `implement` — no project files are written before this answer, and not before feasibility and design are answered.
-7. `build`
-8. `package`
-9. `audit` — Preflight's own scan and `audit.mjs` on the add-on. The browser run injects an SDK stand-in labelled `express-sdk-stand-in`. That run is not an Express pass.
-10. `express` — **BETA: real Express.** Optional. Its own ask, on the dashboard or in chat: "Run a real test in Adobe Express (beta)?" **Skip is the default** and the recommended option. It sits immediately before listing. Skip does not open Express and the next question is the listing and the screenshots. Run, on a local machine, trusts the dev CA, starts `https://localhost:5241`, opens a visible browser at `https://new.express.adobe.com` for the person to sign in, and asks for the result. A pass is only the panel rendered in Express, the feature exercised, and a screenshot. A failure or a timeout is recorded as that. A cloud agent, SSH session, or container skips with a reason and does not launch.
-11. `listing` — the cloned listing text and screenshot path.
-12. `done`
+1. `planning` — only the gaps the request left open (job, name, screen, feature choices).
+2. `plan` — confirm the spec (Build it / Change something / Stop). Nothing is fetched or written before Build it.
+3. `docs` — live-fetch Adobe Express add-on pages in parallel, per-page timeout and an overall budget. Each page is `fresh`, `stale` (cache used), or `failed`. Counts are on the session, so the dashboard shows them.
+4. `origin` — empty folder or an existing add-on.
+5. `template` — only for an empty folder. Names come from the current `@adobe/create-ccweb-add-on` package (constants and the templates directory) checked against the tooling page. No built-in list. If the fetch fails, the list is empty and scaffolding is refused.
+6. `feasibility` — one decision per feature: iframe UI, document sandbox APIs, or unsupported. The choice cites a sentence that is actually in the fetched (or cached) page.
+7. `design` — Spectrum Web Components when the implementation guide still says to prefer them.
+8. `implement` — write the feature after the spec is confirmed; `record` verifies it.
+9. `build`
+10. `package`
+11. `audit` — Preflight's own scan and `audit.mjs` on the add-on. The browser run injects an SDK stand-in labelled `express-sdk-stand-in`. That run is not an Express pass.
+12. `try` — human feedback loop (words and screenshots) until "No more bugs".
+13. `express` — **BETA: real Express.** Optional. Its own ask, on the dashboard or in chat: "Run a real test in Adobe Express (beta)?" **Skip is the default** and the recommended option. It sits immediately before listing. Skip does not open Express and the next question is the listing and the screenshots. Run, on a local machine, trusts the dev CA, starts `https://localhost:5241`, opens a visible browser at `https://new.express.adobe.com` for the person to sign in, and asks for the result. A pass is only the panel rendered in Express, the feature exercised, and a screenshot. A failure or a timeout is recorded as that. A cloud agent, SSH session, or container skips with a reason and does not launch.
+14. `listing` — the cloned listing text and screenshot path.
+15. `done`
 
-Mode is asked before any network call. The dashboard is the same server, started before the doc fetch. Later questions use `ask` / `wait` on the dashboard. AskQuestion is only for the mode question, for chat mode, and for the documented server-down fallback.
+Mode is asked before any network call. Planning and the confirm card come before docs. The dashboard supports text answers and screenshot attach (for planning and try). Later questions use `ask` / `wait` on the dashboard. AskQuestion is only for the mode question, for chat mode, and for the documented server-down fallback. Start with `begin --goal "<request, word for word>"`.
 
 The Linux setup command (`setup-express-linux.mjs`) mirrors the known-working dev-CA trust script. It installs `certutil` with apt, and if that mirror fails it downloads `libnss3-tools` from the Debian security pool and then the Debian pool, using the installed `libnss3` version with the epoch stripped. It trusts `~/.config/Adobe/CCWebAddOn/devcert/certificate-authority/certificate.cert` as nickname `adobe-ccweb-devcert` with trust `C,,` in `sql:$HOME/.pki/nssdb` and `sql:$HOME/.local/share/pki/nssdb`, and it verifies the trust line. A missing CA exits 2. The command never disables a Chrome flag, never passes `--ignore-certificate-errors`, and never uses `127.0.0.1`. The Express clicks and the sign-in stay with the person.
 

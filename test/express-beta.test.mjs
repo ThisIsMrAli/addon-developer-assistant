@@ -39,7 +39,7 @@ function isolatedEnv(out, extra = {}) {
 }
 
 function atExpress({ mode = "chat", answer = "", develop = {}, asks = [], shots = [] } = {}) {
-  const done = new Set(["docs", "origin", "template", "feasibility", "design", "implement", "build", "package", "audit"]);
+  const done = new Set(["planning", "plan", "docs", "design", "template", "implement", "build", "package", "audit", "try"]);
   return {
     kind: "develop",
     mode,
@@ -48,7 +48,11 @@ function atExpress({ mode = "chat", answer = "", develop = {}, asks = [], shots 
       status: done.has(step.id) ? "done" : "pending",
       optional: Boolean(step.optional)
     })),
-    asks: [...(answer ? [{ id: "express", status: "answered", answer }] : []), ...asks],
+    asks: [
+      { id: "feedback", status: "answered", answer: "good", options: [{ id: "good", label: "No more bugs" }, { id: "bugs", label: "Bugs", repeat: true }] },
+      ...(answer ? [{ id: "express", status: "answered", answer }] : []),
+      ...asks
+    ],
     shots,
     develop
   };

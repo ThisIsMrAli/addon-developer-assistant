@@ -142,7 +142,7 @@ test("NX9 --name does not rename an existing add-on", () => {
   assert.equal(run(sessionCli, ["mode", "--set", "chat", "--out", out], env).status, 0);
   assert.equal(run(developCli, ["docs", "--out", out], env, [preloadFixtures]).status, 0);
   assert.equal(run(developCli, ["classify", "--out", out], env).status, 0);
-  for (const [id, value] of [["feasibility", "iframe"], ["design", "leave"], ["implement", "write"]]) {
+  for (const [id, value] of [["plan", "build"], ["design", "leave"]]) {
     assert.equal(run(sessionCli, ["ask", "--id", id, "--out", out], env).status, 0);
     assert.equal(run(sessionCli, ["answer", "--id", id, "--value", value, "--out", out], env).status, 0);
   }
