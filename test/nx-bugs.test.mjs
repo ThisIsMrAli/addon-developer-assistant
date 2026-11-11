@@ -56,6 +56,9 @@ test("NX1 the preview server answers while a child process runs", async () => {
 
 test("NX2 the stand-in exports the documented SDK surface", () => {
   assert.match(STANDIN_SOURCE, /export const RuntimeType/);
+  assert.match(STANDIN_SOURCE, /export const AppEvent/);
+  assert.match(STANDIN_SOURCE, /themechange: "themechange"/);
+  assert.match(STANDIN_SOURCE, /ShadowRoot.prototype.getElementById/);
   assert.match(STANDIN_SOURCE, /documentSandbox/);
   assert.match(STANDIN_SOURCE, /authorize/);
   assert.match(STANDIN_SOURCE, /createRenditions/);

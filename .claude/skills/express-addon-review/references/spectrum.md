@@ -14,7 +14,7 @@ When they say yes, read the fresh downloads before writing UI. If a page and thi
 
 Spectrum Web Components are the preferred controls. For a React add-on, `swc-react` is preferred over React Spectrum. Spectrum CSS is for a simple control only. React Spectrum's Express theme package is described there as alpha.
 
-The Express theme on a Spectrum Web Component page is `<sp-theme>` with `scale="medium"`, `color="light"` or `color="dark"`, and `system="express"`. Import the Express color and scale modules the implementation guide lists, not the default Spectrum theme. Keep the theme in sync with `addOnUISdk.app.ui.theme` and the `themechange` event. The theme-locale page says Spectrum Web Components follow dark theme on their own.
+The Express theme on a Spectrum Web Component page is `<sp-theme>` with `scale="medium"`, `color="light"` or `color="dark"`, and `system="express"`. Import the Express color and scale modules the implementation guide lists, not the default Spectrum theme. Keep the theme in sync with `addOnUISdk.app.ui.theme` and `app.on(AppEvent.themechange, ...)`. `AppEvent` is a named export of the add-on SDK. The audit stand-in exports it too. Do not remove that listener to clear a blank panel. The theme-locale page says Spectrum Web Components follow dark theme on their own.
 
 Match the stack the scan already found.
 

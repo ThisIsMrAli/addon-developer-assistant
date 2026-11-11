@@ -178,6 +178,7 @@ test("the Spectrum catalog is the published bundle, and a component outside the 
   assert.ok(tags.has("sp-accordion-item"));
   assert.deepEqual(spectrumProblems("<sp-theme><sp-table><sp-table-row><sp-table-cell>Codes</sp-table-cell></sp-table-row></sp-table></sp-theme>", tags), []);
   assert.match(spectrumProblems("<sp-theme><sp-not-a-component></sp-not-a-component></sp-theme>", tags).join(" "), /not in the fetched Spectrum catalog/);
+  assert.match(spectrumProblems("<sp-button disabled={false}>Save</sp-button>").join(" "), /present boolean attribute/);
   const handoff = implementationHandoff({ brief: "QR codes", design: "swc", catalog: { version: "9.9.9", components: catalog.components, markdown: "/tmp/catalog.md" } });
   assert.equal(handoff.spectrum.count, catalog.components.length);
   assert.match(handoff.apis.map((item) => item.note).join(" "), /not the whole set/);

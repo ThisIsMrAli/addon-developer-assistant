@@ -305,6 +305,29 @@ export const STANDIN_SOURCE = `/**
  */
 console.info("express-sdk-stand-in: not Adobe Express. A browser run is not an Express pass.");
 document.documentElement.dataset.expressSdkStandIn = "express-sdk-stand-in";
+if (typeof ShadowRoot !== "undefined" && !ShadowRoot.prototype.getElementById) {
+  ShadowRoot.prototype.getElementById = function (id) {
+    if (!id) return null;
+    return this.querySelector("#" + CSS.escape(String(id)));
+  };
+}
+export const AppEvent = {
+  themechange: "themechange",
+  localechange: "localechange",
+  formatchange: "formatchange",
+  reset: "reset",
+  dragstart: "dragstart",
+  dragend: "dragend",
+  dragcancel: "dragcancel",
+  accessTokenChange: "accessTokenChange",
+  documentIdAvailable: "documentIdAvailable",
+  documentLinkAvailable: "documentLinkAvailable",
+  documentPublishedLinkAvailable: "documentPublishedLinkAvailable",
+  documentTitleChange: "documentTitleChange",
+  documentExportAllowedChange: "documentExportAllowedChange",
+  internalMessage: "internalMessage",
+  updateReviewSettings: "updateReviewSettings"
+};
 export const RuntimeType = {
   documentSandbox: "documentSandbox",
   panel: "panel",

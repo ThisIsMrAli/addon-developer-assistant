@@ -3,7 +3,7 @@
  * A button is a real action. Sections, choices, toggles, and color each have their own component.
  */
 
-export const SPECTRUM_EXAMPLES = "Examples, not the whole set: sections are sp-tabs, a list of options is sp-picker or sp-menu, on/off is sp-switch, one of a few is sp-radio, a range is sp-slider, text is sp-textfield or sp-textarea, color is sp-color-area with sp-color-slider and sp-color-field, status is sp-status-light, a group of cards is sp-card, a long page of groups is sp-accordion. A real action, and only a real action, is sp-button. A plain button, input, select, or textarea is not done. An sp-button used as a tab or a menu item is not done.";
+export const SPECTRUM_EXAMPLES = "Examples, not the whole set: sections are sp-tabs, a list of options is sp-picker or sp-menu, on/off is sp-switch, one of a few is sp-radio, a range is sp-slider, text is sp-textfield or sp-textarea, color is sp-color-area with sp-color-slider and sp-color-field, status is sp-status-light, a group of cards is sp-card, a long page of groups is sp-accordion. A real action, and only a real action, is sp-button. A plain button, input, select, or textarea is not done. An sp-button used as a tab or a menu item is not done. React still writes disabled={false} as a present attribute, and Spectrum treats a present disabled, pending, selected, or checked attribute as true. Omit the attribute when the value is false, and set the DOM property in an effect.";
 
 export function spectrumHandoff(catalog = null) {
   const fetched = catalog?.components?.length
@@ -48,5 +48,8 @@ export function spectrumProblems(markup, catalogTags = null) {
   }
   const color = openings(html, "sp-color-area") + openings(html, "sp-color-slider") + openings(html, "sp-color-field") + openings(html, "sp-color-wheel") + openings(html, "sp-swatch");
   if (/type\s*=\s*["']color["']/i.test(html) && !color) problems.push("Color uses the Spectrum color components in the catalog (sp-color-area, sp-color-slider, sp-color-field, sp-color-wheel, sp-swatch), not a plain color input.");
+  if (/\b(?:disabled|pending|selected|checked)=\{false\}|\b(?:disabled|pending|selected|checked)=["']false["']/i.test(html)) {
+    problems.push("Spectrum treats a present boolean attribute as true. disabled={false}, pending={false}, selected={false}, and checked={false} still turn the control on. Omit the attribute when the value is false, and set the DOM property from an effect.");
+  }
   return problems;
 }

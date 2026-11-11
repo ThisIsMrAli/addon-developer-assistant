@@ -3,6 +3,12 @@
 // scripts/audit.mjs injects this file and calls window.__expressReview.audit().
 (() => {
   if (window.__expressReview) return;
+  if (typeof ShadowRoot !== "undefined" && !ShadowRoot.prototype.getElementById) {
+    ShadowRoot.prototype.getElementById = function (id) {
+      if (!id) return null;
+      return this.querySelector("#" + CSS.escape(String(id)));
+    };
+  }
 
   // ---- reading the page, through open shadow roots --------------------------------------------
   const parentOf = (node) => {
@@ -74,6 +80,12 @@
     return parts.join(" > ");
   }
   const ownText = (el) => [...el.childNodes].some((node) => node.nodeType === 3 && clean(node.nodeValue));
+  /** Spectrum's closed picker keeps #label and #applied-label in the shadow tree. They are not on screen. */
+  function hiddenPickerLabel(el) {
+    if (el.id !== "label" && el.id !== "applied-label") return false;
+    for (let node = el; node; node = parentOf(node)) if (node.tagName === "SP-PICKER") return true;
+    return false;
+  }
 
   // ---- what counts as a control ---------------------------------------------------------------
   const TAGS = new Set(["BUTTON", "A", "INPUT", "SELECT", "TEXTAREA", "SUMMARY"]);
@@ -342,6 +354,7 @@
     let tiny = 0;
     for (const el of everyScoped) {
       if (!ownText(el) || /^(SCRIPT|STYLE|NOSCRIPT|TITLE|OPTION)$/.test(el.tagName)) continue;
+      if (hiddenPickerLabel(el)) continue;
       if (disabled(el) || el.closest("[disabled], [aria-disabled='true']")) continue;
       const style = getComputedStyle(el);
       const size = parseFloat(style.fontSize);
