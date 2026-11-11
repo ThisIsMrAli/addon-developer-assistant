@@ -8,7 +8,13 @@ import path from "node:path";
 
 const BUNDLE = "@spectrum-web-components/bundle";
 const REGISTRY = "https://registry.npmjs.org";
-const DOCS = "https://opensource.adobe.com/spectrum-web-components/components";
+const DOCS = "https://opensource.adobe.com/spectrum-web-components";
+const TOOL_PAGES = new Set(["theme", "styles", "base", "grid", "truncated", "reactive-controllers", "shared"]);
+
+export function docsUrl(slug) {
+  const section = TOOL_PAGES.has(slug) ? "tools" : "components";
+  return `${DOCS}/${section}/${slug}/`;
+}
 
 export function tagsFromExports(exportsField) {
   const tags = [];
@@ -48,7 +54,7 @@ export async function fetchSpectrumCatalog({ fetchImpl = globalThis.fetch, timeo
           tag,
           package: name,
           import: `${name}/${tag}.js`,
-          docs: `${DOCS}/${slug}/`
+          docs: docsUrl(slug)
         });
       }
     } catch (error) {

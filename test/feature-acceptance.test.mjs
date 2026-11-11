@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { implementationHandoff, TEXT_INSIDE_PAGE, verifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
 import { pagesForBrief } from "../.claude/skills/express-addon-develop/scripts/lib/docs-live.mjs";
-import { fetchSpectrumCatalog, tagsFromExports } from "../.claude/skills/express-addon-develop/scripts/lib/spectrum-catalog.mjs";
+import { docsUrl, fetchSpectrumCatalog, tagsFromExports } from "../.claude/skills/express-addon-develop/scripts/lib/spectrum-catalog.mjs";
 import { spectrumProblems } from "../.claude/skills/express-addon-develop/scripts/lib/spectrum.mjs";
 
 function addon(files) {
@@ -158,6 +158,8 @@ test("Spectrum is the component set, so a wall of buttons is not a finished pane
 
 test("the Spectrum catalog is the published bundle, and a component outside the short examples still counts", async () => {
   assert.deepEqual(tagsFromExports({ "./sp-accordion.js": {}, "./sp-accordion-item.js": {}, "./package.json": {} }), ["sp-accordion", "sp-accordion-item"]);
+  assert.equal(docsUrl("theme"), "https://opensource.adobe.com/spectrum-web-components/tools/theme/");
+  assert.equal(docsUrl("picker"), "https://opensource.adobe.com/spectrum-web-components/components/picker/");
   const catalog = await fetchSpectrumCatalog({
     fetchImpl: async (url) => {
       const href = String(url);
