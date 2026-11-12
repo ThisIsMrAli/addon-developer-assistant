@@ -607,7 +607,7 @@ function turn(ask) {
   const sheet = h("section", { class: "turn", "aria-labelledby": `turn-title-${k}` },
     h("header", null, h("span", { class: "badge" }, icon("hand", 2.6), ask.kicker || "Your turn"), h("h2", { id: `turn-title-${k}`, text: ask.title || ask.id })),
     promptBlock(ask),
-    shots.length ? h("div", { class: "proofs" }, shots.map((shot) => h("figure", null, h("img", { src: fileUrl(shot.file), alt: shot.label, width: shot.width, height: shot.height }), h("figcaption", { text: `${shot.label}, ${shot.width} by ${shot.height}` })))) : null,
+    shots.length ? h("div", { class: "proofs" }, shots.map(screenshotFigure)) : null,
     ask.id === "listing-review" && s.listing ? listingBlock(s.listing) : null,
     form,
     ask.affects?.length ? h("details", { class: "will" }, h("summary", { text: `What this touches (${ask.affects.length})` }),
@@ -901,7 +901,15 @@ function listingPane() {
   const shots = (s?.shots || []).filter((shot) => shot.kind === "listing");
   if (!s?.listing && !shots.length) return h("p", { class: "empty", text: "No listing work yet. If you choose it, the draft text and the 1360 by 800 screenshots show here before anything is written to your add-on." });
   return h("div", null, s.listing ? listingBlock(s.listing) : null,
-    shots.length ? h("div", { class: "shots" }, shots.map((shot) => h("figure", null, h("img", { src: fileUrl(shot.file), alt: shot.label, width: shot.width, height: shot.height }), h("figcaption", { text: `${shot.label}, ${shot.width} by ${shot.height}` })))) : null);
+    shots.length ? h("div", { class: "shots" }, shots.map(screenshotFigure)) : null);
+}
+
+function screenshotFigure(shot) {
+  return h("figure", null,
+    h("button", { class: "screenshot-preview", type: "button", "aria-label": `Enlarge ${shot.label}`, onclick: () => openBox(shot.file, shot.label) },
+      h("img", { src: fileUrl(shot.file), alt: "", width: shot.width, height: shot.height }),
+      h("span", { class: "preview-label" }, icon("zoom"), "Enlarge")),
+    h("figcaption", { text: `${shot.label}, ${shot.width} by ${shot.height}` }));
 }
 
 function activityPane() {
@@ -930,14 +938,19 @@ function paintStrip() {
     current
       ? h("div", { class: "device" }, h("div", { class: "screen", tabindex: "0", role: "region", "aria-label": `Capture: ${current.label}` }, h("img", { src: fileUrl(current.file), alt: current.label })))
       : h("div", { class: `device blank` }, h("div", { class: "screen" }, walking ? [h("div", { class: "skeleton" }), h("div", { class: "skeleton" }), h("div", { class: "skeleton" }), h("p", { text: "Starting the browser and opening the panel." })] : h("p", { text: "No capture yet." }))),
+    current ? h("button", { class: "btn small", type: "button", "data-fid": "enlarge-panel", onclick: () => openBox(current.file, current.label) }, icon("zoom"), "Enlarge capture") : null,
     shots.length > 1 ? h("div", { class: "film", role: "group", "aria-label": "Captures" }, shots.map((shot) => h("button", { type: "button", "data-fid": `shot-${shot.id}`, "aria-label": shot.label, "aria-current": String(shot.id === current.id), onclick: () => { ui.pickedShot = shot.id; paintStrip(); } }, h("img", { src: fileUrl(shot.file), alt: "" })))) : null
   ]);
 }
 
 function openBox(file, title) {
+  const src = fileUrl(file);
   fill(el.box,
-    h("header", null, h("h2", { id: "lightbox-title", text: title }), h("button", { class: "btn small", type: "button", "aria-label": "Close", onclick: () => el.box.close() }, icon("x", 2.6), "Close")),
-    h("div", { class: "body" }, h("img", { src: fileUrl(file), alt: title })));
+    h("header", null, h("h2", { id: "lightbox-title", text: title }),
+      h("div", { class: "lightbox-actions" },
+        h("a", { class: "btn small", href: src, target: "_blank", rel: "noopener", "aria-label": "Open original image in a new tab" }, icon("external"), "Open original"),
+        h("button", { class: "btn small", type: "button", autofocus: true, onclick: () => el.box.close() }, icon("x", 2.6), "Close"))),
+    h("div", { class: "body" }, h("img", { src, alt: title })));
   el.box.showModal();
 }
 

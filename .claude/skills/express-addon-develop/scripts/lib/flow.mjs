@@ -328,6 +328,7 @@ export function developNext(session, { dashboardUp = false, out = "" } = {}) {
         action: "awaiting-agent-implementation",
         command: "node scripts/develop.mjs record",
         say: "The dashboard already says the add-on is being written. Keep it moving: `node scripts/session.mjs step --id implement --status running --doing \"<what you are writing>\" --progress 2/5`. Write the feature from the brief, the fetched pages, and the APIs below. The add-on includes the document sandbox so it can edit the Express document. Then run record. A stub is rejected.",
+        codeOrganization: "Follow references/code-organization.md before writing and review the changed files against it before record.",
         brief: handoff.brief,
         pages: handoff.pages,
         apis: handoff.apis

@@ -68,6 +68,8 @@ Nothing is created until they choose **Build it**. Docs are not fetched before t
 
 ## Writing the add-on
 
+Plan the source layout before writing. Keep the entry point focused on wiring the UI and put independently testable feature logic and I/O behind named modules. Read [Code organization](references/code-organization.md) before implementing, and review the changed files against it before running `record`. Apply the same boundaries when fixing feedback.
+
 After `implement` hands you the brief, the fetched pages, and the APIs, you write the feature. Then:
 
 ```bash

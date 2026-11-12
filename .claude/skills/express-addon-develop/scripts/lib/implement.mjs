@@ -495,7 +495,7 @@ export function implementationHandoff({ brief, pages = [], design = "", catalog 
     pages,
     apis,
     spectrum: catalog?.components?.length ? { version: catalog.version || "", count: catalog.components.length, file: catalog.markdown || catalog.file || "", components: catalog.components } : null,
-    note: "The agent writes this feature from the fetched Spectrum catalog when the design is Spectrum. A stub is not an implementation."
+    note: "The agent writes this feature from the fetched Spectrum catalog when the design is Spectrum. Follow references/code-organization.md before writing and review the changed files against it before record. A stub is not an implementation."
   };
 }
 
