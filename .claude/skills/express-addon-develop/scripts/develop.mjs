@@ -56,7 +56,7 @@ try {
   else if (command === "build") build();
   else if (command === "package") pack();
   else if (command === "audit") await audit();
-  else if (command === "feedback") feedback();
+  else if (command === "feedback") await feedback();
   else if (command === "listing-text") listingText();
   else if (command === "listing-shots") listingShots();
   else if (command === "version") version();
@@ -179,9 +179,9 @@ function applyTweak() {
   print({ ok: true, plan: next, next: "Ask `plan` again with the updated spec. Do not end your turn." }, out);
 }
 
-function feedback() {
+async function feedback() {
   const out = resolveOut();
-  const prepared = prepareFeedback(out, { changed: typeof args.changed === "string" ? args.changed : "", skip: Boolean(args.skip) });
+  const prepared = await prepareFeedback(out, { changed: typeof args.changed === "string" ? args.changed : "", skip: Boolean(args.skip) });
   if (prepared.skipped) {
     print({ ok: true, ...prepared, next: "Run `node scripts/session.mjs next` and do what it says." }, out);
     return;
@@ -195,10 +195,16 @@ function feedback() {
     print({ ok: true, ...prepared }, out);
     return;
   }
-  const asked = publishAsk(out, prepared.definition);
-  void asked;
+  publishAsk(out, prepared.definition);
   const session = readMerged(out);
   const channel = session.mode === "dashboard" ? "dashboard" : "chat";
+  if (prepared.publish === "serve") {
+    const wait = channel === "dashboard"
+      ? "The start question is on the dashboard. Do NOT write to the user. Run `node scripts/session.mjs wait --id serve` now."
+      : "Ask the serve question with AskQuestion (Start it for me, or I'll start it myself). Then `node scripts/session.mjs answer --id serve --value start|manual`. Do not run npm start yourself before they answer.";
+    print({ ok: true, id: "serve", publish: "serve", channel, next: wait }, out);
+    return;
+  }
   if (channel === "dashboard") {
     print({
       ok: true,

@@ -514,6 +514,7 @@ export function stepForAsk(id, draft) {
       feasibility: "feasibility",
       design: "design",
       implement: "implement",
+      serve: "try",
       feedback: "try",
       express: "express",
       "express-result": "express",

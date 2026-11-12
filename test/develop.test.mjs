@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { fetchDevDocs } from "../.claude/skills/express-addon-develop/scripts/lib/docs-live.mjs";
 import { classifyFeature } from "../.claude/skills/express-addon-develop/scripts/lib/feasibility.mjs";
 import { gate } from "../.claude/skills/express-addon-develop/scripts/lib/implement.mjs";
+import { decideServe, loadLine, prepareFeedback } from "../.claude/skills/express-addon-develop/scripts/lib/feedback.mjs";
+import { patchDevelop } from "../.claude/skills/express-addon-develop/scripts/lib/session-start.mjs";
 import { parseTemplateIds } from "../.claude/skills/express-addon-develop/scripts/lib/templates.mjs";
 import { fetchTemplates } from "../.claude/skills/express-addon-develop/scripts/lib/templates.mjs";
 import { readSession } from "../.claude/skills/express-addon-review/scripts/lib/session.mjs";
@@ -258,6 +260,72 @@ test("a finished session starts a new one on the same folder and does not delete
   const again = run(developCli, ["begin", "--dir", dir, "--name", "Again", "--brief", "A new caption", "--empty", "--out", second.json.out], env, [blockFetch]);
   assert.equal(again.json.resumed, true);
   assert.equal(again.json.out, second.json.out);
+});
+
+test("a down dev server asks before it is started, and a running one does not", async () => {
+  assert.equal(decideServe({ state: "down" }).action, "ask");
+  assert.equal(decideServe({ state: "running" }).action, "ready");
+  assert.equal(decideServe({ state: "other" }).why, "other");
+  assert.equal(decideServe({ state: "untrusted" }).why, "untrusted");
+  assert.equal(decideServe({ state: "down", remote: "SSH session" }).why, "remote");
+  assert.equal(decideServe({ state: "down", policy: true }).why, "policy");
+  assert.equal(decideServe({ state: "down", answer: "manual", answerRound: 1, round: 1 }).action, "manual");
+  assert.equal(decideServe({ state: "down", answer: "manual", answerRound: 1, round: 2 }).action, "ask");
+  assert.equal(decideServe({ state: "down", answer: "start" }).action, "start");
+  assert.equal(decideServe({ state: "running", answer: "start" }).action, "ready");
+  assert.match(loadLine("manual"), /npm start -- --analytics off/);
+  assert.match(loadLine("running", { report: "listening on [::1]" }), /already running/);
+  assert.match(loadLine("policy"), /LoopbackNetworkBlockedForUrls/);
+  assert.match(loadLine("started"), /localhost:5241/);
+  assert.match(loadLine("manual"), /not 127\.0\.0\.1/);
+
+  const dir = emptyDir();
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "develop-out-"));
+  const env = isolatedEnv(out);
+  assert.equal(run(developCli, ["begin", "--dir", dir, "--empty", "--name", "Serve Me", "--brief", "caption", "--out", out], env, [blockFetch]).status, 0);
+  assert.equal(run(sessionCli, ["step", "--id", "audit", "--status", "done", "--detail", "Audit finished", "--out", out], env).status, 0);
+  patchDevelop(out, { audited: true });
+  const down = async () => ({ host: "", report: "Port 5241 is not listening.", listening: [] });
+  const asked = await prepareFeedback(out, { probe: down, remote: () => "", policy: () => false });
+  assert.equal(asked.publish, "serve");
+  assert.equal(asked.definition.options[0].id, "start");
+  assert.equal(asked.definition.options[1].id, "manual");
+
+  const { publishAsk, appendAnswerLine } = await import("../.claude/skills/express-addon-review/scripts/lib/session.mjs");
+  const published = publishAsk(out, asked.definition);
+  appendAnswerLine(out, { type: "answer", askId: "serve", nonce: published.ask.nonce, value: "start", via: "test", at: new Date().toISOString() });
+  let phase = "down";
+  let started = 0;
+  const probe = async () => phase === "down"
+    ? { host: "", report: "Port 5241 is not listening.", listening: [] }
+    : { host: "::1", report: "Port 5241 is listening on [::1] only.", listening: ["[::1]"] };
+  const ran = await prepareFeedback(out, {
+    probe,
+    remote: () => "",
+    policy: () => false,
+    check: async () => ({ ok: true, trusted: true }),
+    identify: async () => ({ ok: true, name: "Serve Me" }),
+    start: async () => {
+      started += 1;
+      phase = "up";
+      return { ok: true, pid: 7 };
+    }
+  });
+  assert.equal(started, 1);
+  assert.equal(ran.publish, "feedback");
+  assert.match(fs.readFileSync(path.join(out, "load.txt"), "utf8"), /Started it for you/);
+  assert.match(fs.readFileSync(path.join(out, "load.txt"), "utf8"), /\[::1\]/);
+  const again = await prepareFeedback(out, {
+    probe,
+    remote: () => "",
+    policy: () => false,
+    check: async () => ({ ok: true, trusted: true }),
+    identify: async () => ({ ok: true }),
+    start: async () => { started += 1; return { ok: true }; }
+  });
+  assert.equal(again.publish, "feedback");
+  assert.equal(started, 1, "a server that is already this add-on is not started again");
+  assert.match(fs.readFileSync(path.join(out, "load.txt"), "utf8"), /already running/);
 });
 
 test("the Linux setup command does not open Express and does not disable the Chrome flag", () => {

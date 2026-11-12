@@ -78,7 +78,7 @@ If this step writes or edits `manifest.json`, keep `name` matching `^[a-zA-Z0-9]
 
 ## Try, report, fix, repeat
 
-After `audit` is done, `next` says to run `node scripts/develop.mjs feedback`. It publishes one card: how to load the build, a box for words and screenshots, and two choices, "Something is wrong, or I want a change" and "No more bugs, finish trying". Wait for it like any other question.
+After `audit` is done, `next` says to run `node scripts/develop.mjs feedback`. That first checks port 5241. If this add-on is already running, the try card says so. If nothing is running, one question asks whether to start it (`npm start -- --analytics off`, https://localhost:5241). A remote machine, a blocked loopback policy, or a different add-on already on that port does not start a server. The try card then says how to load it, with a box for words and screenshots, and two choices, "Something is wrong, or I want a change" and "No more bugs, finish trying". Wait for it like any other question.
 
 When the answer is the first choice, `wait` prints their `text` and the file path of each screenshot in `images`. Then:
 

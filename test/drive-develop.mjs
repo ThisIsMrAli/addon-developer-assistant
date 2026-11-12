@@ -205,6 +205,7 @@ function defaultAnswer(id, out) {
   if (id === "feasibility") return "iframe";
   if (id === "design") return "leave";
   if (id === "feedback") return "good";
+  if (id === "serve") return "manual";
   if (id === "express") return "skip";
   if (id === "express-result") return "skip";
   if (id === "listing") return "skip";

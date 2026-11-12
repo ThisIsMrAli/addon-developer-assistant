@@ -360,7 +360,7 @@ export function developNext(session, { dashboardUp = false, out = "" } = {}) {
 
   if (open("try")) {
     if (!answered("feedback") || answered("feedback")?.options?.find((item) => item.id === answered("feedback").answer)?.repeat) {
-      return { action: "run", command: "node scripts/develop.mjs feedback", say: "Publish the try card for the developer. Then wait for the answer. If no person is there (a background or cloud run), run it with --skip." };
+      return { action: "run", command: "node scripts/develop.mjs feedback", say: "Check whether https://localhost:5241 is this add-on. If it is not running, the serve question asks before anything is started. Then publish the try card. If no person is there, run feedback with --skip." };
     }
     if (answered("feedback")?.answer === "good") {
       return { action: "run", command: "node scripts/session.mjs step --id try --status done --detail \"No more bugs\"", say: "The developer said no more bugs. Mark try done. The optional Express beta is next." };
