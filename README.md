@@ -1,111 +1,54 @@
-# Express Add-on Develop Assistant
+# Adobe Express Add-on Developer Assistant
 
-Add-on Preflight, plus a flow that starts from an empty folder or an add-on you already have. The development skill is [`.claude/skills/express-addon-develop/SKILL.md`](.claude/skills/express-addon-develop/SKILL.md). What was cloned and what was added is in [PLAN.md](PLAN.md). The license is the [MIT license](LICENSE). The copyright notice stays `Copyright (c) 2026 express-addon-review contributors`.
+**From idea to Express add-on.** Describe the tool you want to build. Shape the plan, follow the build, and try a packaged add-on in Adobe Express.
+
+[![Demo capture showing the QR add-on and its development dashboard.](site/demo.webp)](https://drive.google.com/file/d/1ev2h_zNWLxP5_Wcxg1FSXdD1MwDFhW5j/view?usp=sharing)
+
+[Watch the demo](https://drive.google.com/file/d/1ev2h_zNWLxP5_Wcxg1FSXdD1MwDFhW5j/view?usp=sharing) · [Install](#install) · [How it works](#how-it-works)
+
+## How it works
+
+1. **Shape the idea.** Confirm the goal and the plan before project files are written.
+2. **Build the add-on.** Use Adobe’s docs, select a template, and implement the feature with the right Express APIs.
+3. **Check the result.** Verify the implementation, package it, and walk the panel in light and dark.
+4. **Try and improve.** Load it in Express, share feedback with screenshots, and try the next build.
+
+
+## What you get
+
+- **Build on existing work.** Add a feature to a project you maintain, or start with a new add-on.
+- **Follow every decision.** The local dashboard shows the plan, work in progress, captures, and feedback.
+- **Prepare your listing.** Review draft marketplace copy and images before they are copied into your project.
+
+The automated panel walk uses an SDK stand-in. Use Adobe Express to verify host behavior.
+
+## Install
+
+You’ll need Node.js 18 or newer and GitHub access to the private repository.
 
 ```bash
-npm run develop -- begin --dir /path/to/folder --name "Name" --brief "Add a caption field to the panel"
+git clone https://github.com/ThisIsMrAli/addon-developer-assistant.git
+cd addon-developer-assistant
+node install-agents.mjs --global
+```
+
+Open a new chat in **Codex**, **Claude Code**, or **Cursor** with your project open. The installer also links supported tools such as Gemini CLI and Windsurf. Keep the checkout on disk so the links continue to work. Omit `--global` to link skills inside the checkout only.
+
+> Use express-addon-develop to build an Express add-on that creates QR codes and adds them to the current design.
+
+The installer links both Express skills in this checkout. Development uses the companion review scripts shipped here.
+
+## Run from the terminal
+
+```bash
+npm run develop -- begin --dir /path/to/folder --goal "Add a caption field to the panel"
 npm test
 npm run test:box
 ```
 
-`test:box` skips the browser walk and the live scaffold. A browser run of a generated add-on uses an SDK stand-in. It is not an Adobe Express pass.
+Use a browser on the same machine for panel checks and listing captures. Set `CHROME_PATH` if needed. The optional develop beta step can open Express only after you choose Run.
 
-## BETA: a real test in Adobe Express
-
-After the headless audit, the dashboard (or the chat, in chat mode) asks "Run a real test in Adobe Express (beta)?" Skip is the default. Run, on a computer that is not a cloud agent, an SSH session, or a container, trusts Adobe's dev CA, starts `https://localhost:5241`, and opens a visible browser at `https://new.express.adobe.com` for you to sign in. This skill never takes a password.
-
-A pass is recorded only when the panel rendered inside Express and the feature was exercised, with a screenshot. A failure or a timeout is recorded as that. A remote machine skips the step and says why. Chrome security flags stay as they are. The address is `localhost`, never `127.0.0.1`, and the browser is not started with `--ignore-certificate-errors`.
-
-Adobe's `ccweb-add-on-scripts` dev server listens on `[::1]:5241` only. The skill probes both `[::1]` and `127.0.0.1` and reports which one is listening. A browser or health check that resolves `localhost` to `127.0.0.1` gets connection refused while the server is up on `[::1]`. The address you open in Express stays `https://localhost:5241`.
-
-A managed Chrome policy `LoopbackNetworkBlockedForUrls` (often `["*"]`) blocks that loopback call. Site settings then say Apps on device are blocked by the administrator, and Express says the development environment failed to load and to check the PORT number. When that policy is present, the skip message and any failure message name `LoopbackNetworkBlockedForUrls`. The skill reads the JSON under `/etc/opt/chrome/policies` and `/etc/chromium/policies`. It does not change the policy and it does not add a Chrome security flag. A cloud agent, SSH session, or container still skips on its own.
-
-When localhost sideload is blocked, the real Express test is a private link, and only after you approve it. Run `npm run package`, then upload `dist.zip`. In Express open Manage add-ons, then the listing, then Private link. A publisher profile is required first, and the logo must be 250x250. This skill does not create the publisher profile or the listing. That step is manual.
-
-The adapter is detected, not assumed. Cursor's built-in browser is used when that agent exposes it. Otherwise the skill opens local Chrome or Edge. Claude Code's `claude --chrome` and Codex's computer-use API are documented in the skill and are not invoked from here; the fallback is local Chrome plus checklist buttons. Details and sources are in the develop skill's `references/express-beta.md`.
-
-## Add-on Preflight
-
-The check you run on an Adobe Express add-on before you submit it. Point it at the add-on folder. It checks the source against Adobe’s current docs, walks the panel at 320px in light and dark, fixes the layout bugs it measures, and prepares the marketplace listing.
-
-Add-on Preflight does not open Adobe Express and does not submit the add-on. A finished review is not marketplace approval. The develop flow has a separate beta step that can open Express, and skip is the default. Adobe’s sentences stay on Adobe’s pages. The refresh command downloads the docs, and a check is skipped when that download no longer contains the sentence it depends on.
-
-## Requirements
-
-- Node.js 18 or newer
-- Chrome, Edge, or Chromium on the same computer, for the panel walk and the listing screenshots. Set `CHROME_PATH` to choose one. Without a browser, the review says so and continues by hand
-- `pdftotext`, optional, for the brand PDF
-
-macOS, Windows, and Linux.
-
-## Install
-
-From this folder:
-
-```bash
-node install-agents.mjs --global
-```
-
-That links both skills into the agent folders on this machine, including Claude, Cursor, Codex, Gemini, and Windsurf. Use `node install-agents.mjs` without `--global` to link them only inside this project.
-
-`npx skills add` copies each skill directory on its own. Install both, into the same parent, or the develop skill cannot see Add-on Review.
-
-The GitHub repository is private. The remote install fails with `Authentication failed` unless you are logged in as someone who can read it (`gh auth login`, or `GH_TOKEN` / `GITHUB_TOKEN` with access to the repo). It does not make the repository public.
-
-```bash
-# From a checkout of this private repository. This does not need GitHub auth.
-npx skills add . --skill express-addon-review --skill express-addon-develop
-
-# Remote install from main. This is the form that works today, after GitHub authentication.
-npx skills add ThisIsMrAli/addon-developer-assistant --skill express-addon-review --skill express-addon-develop
-
-# A branch that still exists can be named with "#". A /tree/<branch> URL breaks when the branch name contains "/".
-# The pre-merge branch cursor/import-express-addon-develop-assistant was deleted when that pull request merged.
-# Naming it now fails: the installer says the remote branch was not found. Use the plain repository name above.
-```
-
-Main has both skills. The old `#branch` line is not a current install path.
-
-`node install-agents.mjs --global` from this folder is the other path that does not talk to GitHub. If you were sent the preview address instead, download the project from that page and run one of the local commands above.
-
-## Run a review
-
-Open the add-on in an agent that has the skill and ask it to review that folder. The agent follows [`.claude/skills/express-addon-review/SKILL.md`](.claude/skills/express-addon-review/SKILL.md).
-
-To run the pieces yourself:
-
-```bash
-npm run refresh                                   # download the current Adobe docs once
-npm run review -- --input /path/to/addon          # write the report and start a session
-npm run dashboard -- start                        # open the local dashboard in Chrome
-node .claude/skills/express-addon-review/scripts/audit.mjs
-npm run session -- show
-npm run dashboard -- stop
-npm test
-```
-
-Reports are written to `~/.express-addon-review/<slug>/`, not into the add-on and not into this repository.
-
-## What a review covers
-
-**Source.** Checks tied to Adobe’s current docs, plus review patterns taken from marketplace letters. Comments are ignored, markup is read tag by tag, and a project-wide rule looks at the whole project. `index.html` keywords, the meta description, and the document title are not the listing.
-
-**Upload.** A zip in the project root is read in memory: the manifest at its root, the 50 MB limit, no hidden files, the files the manifest names, and whether the zip is older than the source.
-
-**Panel.** The panel is built and served on this computer when nothing is already running, so the walk does not need an Adobe sign-in. It opens at 320px in light and dark and presses every screen it can reach. It does not press Delete, Reset, Buy, or Sign out. Measured bugs, such as a close button at the bottom of a dialog, are fixed and checked again. Warnings wait for one decision.
-
-**Listing.** Text is drafted from the manifest, the package description, and the visible panel. Screenshots are rendered at 1360×800 from one locked template, using only words that are already in the add-on. Both are shown for approval before anything is written into the add-on.
-
-**A person.** Other browsers, a slow network, the publisher website, and test credentials are listed for you. They are not guessed. If the add-on was rejected, paste the letter. Each reason becomes a note, is checked, and is returned as text for the resubmission.
-
-The local dashboard shows the current step, a progress bar, the findings, and the 320px captures. It listens on this computer only. Adobe’s reviewers never see it. If it cannot start, the same decisions continue in chat.
-
-## What it will not do
-
-- Submit the add-on, or claim that Adobe will approve it
-- Open Adobe Express from a Preflight review, or sign in. The develop beta step can open Express, and only after you choose Run. Skip is the default, and this project never takes a password
-- Invent listing text, publisher details, or test credentials
-- Ask once per finding
+See the [development workflow](.claude/skills/express-addon-develop/SKILL.md) and [companion review workflow](.claude/skills/express-addon-review/SKILL.md) for CLI steps.
 
 ## Share a private preview
 
@@ -116,7 +59,7 @@ The source repository stays private. It does not appear on a public GitHub profi
 GitHub Pages has no signature check. A private repository hides the source. It does not hide a Pages site. The preview address is an unguessable path, with an optional expiry, which is as close as Pages can come to a presigned URL:
 
 - The site root says “Not found” and does not name the project.
-- The page and the install zip exist only under that path.
+- The page and its presentation assets exist only under that path.
 - Anyone with the address can open it until you rotate the path, or until the date passes and the next deploy removes it.
 - An expired path is removed the next time the owner runs the Pages workflow. `noindex` asks search engines not to list the site. That is not access control.
 
