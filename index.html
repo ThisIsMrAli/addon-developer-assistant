@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-product="develop">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Describe the tool you want to build. Shape the plan, follow the build, and try a packaged add-on in Adobe Express.">
+  <title>Adobe Express Add-on Developer Assistant</title>
+  <link rel="stylesheet" href="site.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <div class="wrap">
+    <header class="top">
+      <a class="brand" href="#content"><span class="mark" aria-hidden="true">Ex</span>Adobe Express Add-on Developer Assistant</a>
+      <nav aria-label="Page"><a href="#workflow">Workflow</a><a href="#install">Install</a><a href="https://github.com/ThisIsMrAli/addon-developer-assistant">GitHub</a></nav>
+    </header>
+    <main id="content">
+      <section class="hero">
+        <div>
+          <p class="kicker">Adobe Express development</p>
+          <h1>From idea to Express add-on.</h1>
+          <p class="lede">Describe the tool you want to build. Shape the plan, follow the build, and try a packaged add-on in Adobe Express.</p>
+          <div class="actions"><a class="button primary" href="https://drive.google.com/file/d/1ev2h_zNWLxP5_Wcxg1FSXdD1MwDFhW5j/view?usp=sharing">Watch the demo</a><a class="button" href="#install">Install the skill</a></div>
+        </div>
+        <figure class="demo">
+          <a href="https://drive.google.com/file/d/1ev2h_zNWLxP5_Wcxg1FSXdD1MwDFhW5j/view?usp=sharing" aria-label="Watch the Adobe Express Add-on Developer Assistant demo"><img src="demo.webp" alt="Demo capture showing the QR add-on and its development dashboard." width="1120" height="565"><span class="play" aria-hidden="true">▶ Play demo</span></a>
+          <figcaption>Demo capture showing the QR add-on and its development dashboard.</figcaption>
+        </figure>
+      </section>
+      <section id="workflow" class="section">
+        <h2>How it works</h2>
+        <ol class="steps"><li><span class="step-number">01</span><h3>Shape the idea</h3><p>Confirm the goal and the plan before project files are written.</p></li><li><span class="step-number">02</span><h3>Build the add-on</h3><p>Use Adobe’s docs, select a template, and implement the feature with the right Express APIs.</p></li><li><span class="step-number">03</span><h3>Check the result</h3><p>Verify the implementation, package it, and walk the panel in light and dark.</p></li><li><span class="step-number">04</span><h3>Try and improve</h3><p>Load it in Express, share feedback with screenshots, and try the next build.</p></li></ol>
+        <div class="features"><article><h3>Build on existing work</h3><p>Add a feature to a project you maintain, or start with a new add-on.</p></article><article><h3>Follow every decision</h3><p>The local dashboard shows the plan, work in progress, captures, and feedback.</p></article><article><h3>Prepare your listing</h3><p>Review draft marketplace copy and images before they are copied into your project.</p></article></div>
+      </section>
+      <section id="install" class="section">
+        <h2>Install and try it</h2>
+        <div class="install-grid">
+          <div>
+            <p>Requires Node.js 18 or newer and Git.</p>
+            <div class="terminal">
+              <div class="terminal-head"><strong>Run in your terminal</strong><button type="button" data-copy="install-command" aria-live="polite" hidden>Copy commands</button></div>
+              <pre><code id="install-command">git clone https://github.com/ThisIsMrAli/addon-developer-assistant.git
+cd addon-developer-assistant
+node install-agents.mjs --global</code></pre>
+            </div>
+            <p class="prompt"><strong>Try this prompt</strong><br>Use express-addon-develop to build an Express add-on that creates QR codes and adds them to the current design.</p>
+          </div>
+          <div>
+            <h3>Open your coding tool</h3>
+            <details><summary>Codex</summary><p>Open your project in Codex after running the installer. Ask for <code>express-addon-develop</code> by name in a new chat.</p></details><details><summary>Claude Code</summary><p>Open your project in Claude Code after running the installer. Ask for <code>express-addon-develop</code> by name in a new chat.</p></details><details><summary>Cursor</summary><p>Open your project in Cursor after running the installer. Ask for <code>express-addon-develop</code> by name in a new chat.</p></details>
+            <details><summary>Other supported tools</summary><p>The installer also links the skill into supported locations for tools such as Gemini CLI and Windsurf. Keep the checkout on disk so the links continue to work.</p></details>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer class="foot"><p>The automated panel walk uses an SDK stand-in. Use Adobe Express to verify host behavior.</p><a href="https://github.com/ThisIsMrAli/addon-developer-assistant">Read the repository guide</a></footer>
+  </div>
+</body>
+</html>
